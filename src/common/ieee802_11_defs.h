@@ -259,6 +259,7 @@
 #define WLAN_EID_TFS_RESP 92
 #define WLAN_EID_WNMSLEEP 93
 #define WLAN_EID_TIME_ZONE 98
+#define WLAN_EID_DMS_REQ 99
 #define WLAN_EID_LINK_ID 101
 #define WLAN_EID_INTERWORKING 107
 #define WLAN_EID_ADV_PROTO 108
@@ -615,6 +616,20 @@ struct ieee80211_mgmt {
 					u8 action; /* 15 */
 					u8 variable[];
 				} STRUCT_PACKED slf_prot_action;
+				struct {
+					u8 action;
+					u8 dialogtoken;
+					u8 eid;
+					u8 len;
+					u8 variable[0];
+				} STRUCT_PACKED wnm_tfs_req;
+				struct {
+					u8 action;
+					u8 dialogtoken;
+					u8 eid;
+					u8 len;
+					u8 variable[0];
+				} STRUCT_PACKED wnm_dms_req;
 			} u;
 		} STRUCT_PACKED action;
 	} u;
@@ -1195,6 +1210,7 @@ enum plink_action_field {
 #define WLAN_CIPHER_SUITE_CKIP_CMIC	0x00409601
 #define WLAN_CIPHER_SUITE_CMIC		0x00409602
 #define WLAN_CIPHER_SUITE_KRK		0x004096FF /* for nl80211 use only */
+#define WLAN_CIPHER_SUITE_PMK		0x000FACFF /* for set pmk to driver */
 
 /* AKM suite selectors */
 #define WLAN_AKM_SUITE_8021X		0x000FAC01
@@ -1207,6 +1223,15 @@ enum plink_action_field {
 #define WLAN_AKM_SUITE_8021X_SUITE_B_192	0x000FAC12
 #define WLAN_AKM_SUITE_CCKM		0x00409600
 #define WLAN_AKM_SUITE_OSEN		0x506f9a01
+#ifdef CONFIG_WAPI
+#ifdef CONFIG_SC2332
+#define WLAN_AKM_SUITE_WAPI_PSK	0x00147202
+#define WLAN_AKM_SUITE_WAPI_CERT	0x00147201
+#else
+#define WLAN_AKM_SUITE_WAPI_PSK 0x000FAC04
+#define WLAN_AKM_SUITE_WAPI_CERT	0x000FAC12
+#endif
+#endif
 
 
 /* IEEE 802.11v - WNM Action field values */

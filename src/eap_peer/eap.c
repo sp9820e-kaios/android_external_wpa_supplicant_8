@@ -1375,10 +1375,131 @@ static int eap_sm_imsi_identity(struct eap_sm *sm,
 
 #endif /* PCSC_FUNCS */
 
+#ifdef CONFIG_ATCI
+
+int eap_sm_get_sim_slot(struct eap_sm *sm)
+{
+	struct eap_peer_config *conf;
+	conf = eap_get_config(sm);
+	if (conf == NULL) return -1;
+	return conf->sim_num;
+}
+
+static int eap_sm_append_3gpp_realm(struct eap_sm *sm, char *imsi,
+				    size_t max_len, size_t *imsi_len)
+{
+	int mnc_len;
+	char *pos, mnc[4];
+
+	if (*imsi_len + 36 > max_len) {
+		wpa_printf(MSG_WARNING, "No room for realm in IMSI buffer");
+		return -1;
+	}
+
+	/* MNC (2 or 3 digits) */
+	mnc_len = scard_get_mnc_len(eap_sm_get_sim_slot(sm));
+	if (mnc_len < 0) {
+		wpa_printf(MSG_INFO, "Failed to get MNC length from (U)SIM "
+			   "assuming 3");
+		mnc_len = 3;
+	}
+
+	if (mnc_len == 2) {
+		mnc[0] = '0';
+		mnc[1] = imsi[3];
+		mnc[2] = imsi[4];
+	} else if (mnc_len == 3) {
+		mnc[0] = imsi[3];
+		mnc[1] = imsi[4];
+		mnc[2] = imsi[5];
+	}
+	mnc[3] = '\0';
+
+	pos = imsi + *imsi_len;
+	pos += os_snprintf(pos, imsi + max_len - pos,
+			   "@wlan.mnc%s.mcc%c%c%c.3gppnetwork.org",
+			   mnc, imsi[0], imsi[1], imsi[2]);
+	*imsi_len = pos - imsi;
+
+	return 0;
+}
+
+static int eap_sm_imsi_identity(struct eap_sm *sm,
+				struct eap_peer_config *conf)
+{
+	enum { EAP_SM_SIM, EAP_SM_AKA, EAP_SM_AKA_PRIME } method = EAP_SM_SIM;
+	char imsi[100];
+	size_t imsi_len;
+	struct eap_method_type *m = conf->eap_methods;
+	int i;
+
+	imsi_len = sizeof(imsi);
+	if (scard_get_imsi(eap_sm_get_sim_slot(sm), imsi, &imsi_len)) {
+		wpa_printf(MSG_WARNING, "Failed to get IMSI from SIM");
+		return -1;
+	}
+
+	wpa_hexdump_ascii(MSG_DEBUG, "IMSI", (u8 *) imsi, imsi_len);
+
+	if (imsi_len < 7) {
+		wpa_printf(MSG_WARNING, "Too short IMSI for SIM identity");
+		return -1;
+	}
+
+	if (eap_sm_append_3gpp_realm(sm, imsi, sizeof(imsi), &imsi_len) < 0) {
+		wpa_printf(MSG_WARNING, "Could not add realm to SIM identity");
+		return -1;
+	}
+	wpa_hexdump_ascii(MSG_DEBUG, "IMSI + realm", (u8 *) imsi, imsi_len);
+
+	for (i = 0; m && (m[i].vendor != EAP_VENDOR_IETF ||
+			  m[i].method != EAP_TYPE_NONE); i++) {
+		if (m[i].vendor == EAP_VENDOR_IETF &&
+		    m[i].method == EAP_TYPE_AKA_PRIME) {
+			method = EAP_SM_AKA_PRIME;
+			break;
+		}
+
+		if (m[i].vendor == EAP_VENDOR_IETF &&
+		    m[i].method == EAP_TYPE_AKA) {
+			method = EAP_SM_AKA;
+			break;
+		}
+	}
+
+	os_free(conf->identity);
+	conf->identity = os_malloc(1 + imsi_len);
+	if (conf->identity == NULL) {
+		wpa_printf(MSG_WARNING, "Failed to allocate buffer for "
+			   "IMSI-based identity");
+		return -1;
+	}
+
+	switch (method) {
+	case EAP_SM_SIM:
+		conf->identity[0] = '1';
+		break;
+	case EAP_SM_AKA:
+		conf->identity[0] = '0';
+		break;
+	case EAP_SM_AKA_PRIME:
+		conf->identity[0] = '6';
+		break;
+	}
+	os_memcpy(conf->identity + 1, imsi, imsi_len);
+	conf->identity_len = 1 + imsi_len;
+
+	return 0;
+}
+
+#endif /* CONFIG_ATCI */
 
 static int eap_sm_set_scard_pin(struct eap_sm *sm,
 				struct eap_peer_config *conf)
 {
+#ifdef CONFIG_ATCI
+	return 0;
+#endif
 #ifdef PCSC_FUNCS
 	if (scard_set_pin(sm->scard_ctx, conf->pin)) {
 		/*
@@ -1401,6 +1522,9 @@ static int eap_sm_set_scard_pin(struct eap_sm *sm,
 static int eap_sm_get_scard_identity(struct eap_sm *sm,
 				     struct eap_peer_config *conf)
 {
+#ifdef CONFIG_ATCI
+	return eap_sm_imsi_identity(sm, conf);
+#endif
 #ifdef PCSC_FUNCS
 	if (eap_sm_set_scard_pin(sm, conf))
 		return -1;
@@ -1441,6 +1565,44 @@ struct wpabuf * eap_sm_buildIdentity(struct eap_sm *sm, int id, int encrypted)
 					    &identity_len)) != NULL) {
 		wpa_hexdump_ascii(MSG_DEBUG, "EAP: using method re-auth "
 				  "identity", identity, identity_len);
+#ifdef CONFIG_ATCI
+	} else if (config->eap_methods && (config->eap_methods[0].method == EAP_TYPE_SIM
+								|| config->eap_methods[0].method == EAP_TYPE_AKA
+								|| config->eap_methods[0].method == EAP_TYPE_AKA_PRIME)) {
+		if(config->identity == NULL) {
+			if (eap_sm_get_scard_identity(sm, config) < 0) return NULL;
+			wpa_printf(MSG_DEBUG, "EAP-SIM: the identity in configuration file was NULL");
+			identity = config->identity;
+			identity_len = config->identity_len;
+		} else {
+			u8 nai[100];
+			size_t nai_len;
+			os_memcpy(nai, config->identity, config->identity_len);
+			nai_len = config->identity_len;
+			if (eap_sm_get_scard_identity(sm, config) < 0) return NULL;
+			if(nai_len != config->identity_len) {
+				wpa_printf(MSG_DEBUG, "EAP-SIM: the nai length in configuration file does not match the current sim value");
+				identity = config->identity;
+				identity_len = config->identity_len;
+			}
+			if(os_memcmp(nai, config->identity, config->identity_len) ) {
+				wpa_printf(MSG_DEBUG, "EAP-SIM: the nai in configuration file does not match the current sim value");
+				identity = config->identity;
+				identity_len = config->identity_len;
+			} else {
+				if(config->anonymous_identity) {
+					wpa_printf(MSG_DEBUG, "EAP-SIM: the sim card has not been changed, use pseudonym NAI");
+					identity = config->anonymous_identity;
+					identity_len = config->anonymous_identity_len;
+				} else {
+					wpa_printf(MSG_DEBUG, "EAP-SIM: the sim card has not been changed, use real NAI");
+					identity = config->identity;
+					identity_len = config->identity_len;
+				}
+			}
+		}
+		wpa_hexdump_ascii(MSG_DEBUG, "EAP-SIM: the NAI is", identity, identity_len);
+#endif
 	} else if (!encrypted && config->anonymous_identity) {
 		identity = config->anonymous_identity;
 		identity_len = config->anonymous_identity_len;

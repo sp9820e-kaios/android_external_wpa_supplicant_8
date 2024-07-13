@@ -717,6 +717,12 @@ struct wpa_ssid {
 	 * this MBSS will trigger a peering attempt.
 	 */
 	int no_auto_peer;
+
+#ifdef CONFIG_WAPI
+	int psk_key_type;
+	char *wapi_as_cert;
+	char *wapi_user_cert;
+#endif
 };
 
 #endif /* CONFIG_SSID_H */

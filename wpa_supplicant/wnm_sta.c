@@ -137,6 +137,8 @@ int ieee802_11_send_wnmsleep_req(struct wpa_supplicant *wpa_s,
 	if (res < 0)
 		wpa_printf(MSG_DEBUG, "Failed to send WNM-Sleep Request "
 			   "(action=%d, intval=%d)", action, intval);
+	else
+		wpa_s->wnmsleep_used = 1;
 
 	os_free(wnmsleep_ie);
 	os_free(wnmtfs_ie);
@@ -186,6 +188,12 @@ static void wnm_sleep_mode_exit_success(struct wpa_supplicant *wpa_s,
 	ptr = (u8 *) frm + 1 + 2;
 	end = ptr + key_len_total;
 	wpa_hexdump_key(MSG_DEBUG, "WNM: Key Data", ptr, key_len_total);
+
+	if (key_len_total && !wpa_sm_pmf_enabled(wpa_s->wpa)) {
+		wpa_msg(wpa_s, MSG_INFO,
+			"WNM: Ignore Key Data in WNM-Sleep Mode Response - PMF not enabled");
+		return;
+	}
 
 	while (ptr + 1 < end) {
 		if (ptr + 2 + ptr[1] > end) {
@@ -247,6 +255,12 @@ static void ieee802_11_rx_wnmsleep_resp(struct wpa_supplicant *wpa_s,
 	u8 *tfsresp_ie_end = NULL;
 	size_t left;
 
+	if (!wpa_s->wnmsleep_used) {
+		wpa_printf(MSG_DEBUG,
+			"WNM: Ignore WNM-Sleep Mode Response frame since WNM-Sleep Mode operation has not been requested");
+		return;
+	}
+
 	if (len < 3)
 		return;
 	key_len_total = WPA_GET_LE16(frm + 1);
@@ -281,6 +295,8 @@ static void ieee802_11_rx_wnmsleep_resp(struct wpa_supplicant *wpa_s,
 		wpa_printf(MSG_DEBUG, "No WNM-Sleep IE found");
 		return;
 	}
+
+	wpa_s->wnmsleep_used = 0;
 
 	if (wnmsleep_ie->status == WNM_STATUS_SLEEP_ACCEPT ||
 	    wnmsleep_ie->status == WNM_STATUS_SLEEP_EXIT_ACCEPT_GTK_UPDATE) {
@@ -1108,6 +1124,40 @@ static void ieee802_11_rx_wnm_notif_req(struct wpa_supplicant *wpa_s,
 }
 
 
+static void ieee802_11_rx_wnmtfs_resp(struct wpa_supplicant *wpa_s,
+					const u8 *frm, int len)
+{
+	/*
+	 * Action [1] | Dialog Token [1] |TFS Response IE
+	 */
+	u8 *pos = (u8 *) frm; /* point to payload after the action field */
+
+	wpa_printf(MSG_DEBUG, "WNM TFS Response action=%u token=%u", frm[0], frm[1]);
+
+	wpa_hexdump(MSG_DEBUG, "WNM TFS Response: Element", pos, len);
+	/*TBD*/
+	return;
+
+}
+
+
+static void ieee802_11_rx_wnmdms_resp(struct wpa_supplicant *wpa_s,
+					const u8 *frm, int len)
+{
+	/*
+	 * Action [1] | Dialog Token [1] |DMS Response IE
+	 */
+	u8 *pos = (u8 *) frm; /* point to payload after the action field */
+
+	wpa_printf(MSG_DEBUG, "WNM DMS Response action=%u token=%u", frm[0], frm[1]);
+
+	wpa_hexdump(MSG_DEBUG, "WNM DMS Response: Element", pos, len);
+	/*TBD*/
+	return;
+
+}
+
+
 void ieee802_11_rx_wnm_action(struct wpa_supplicant *wpa_s,
 			      const struct ieee80211_mgmt *mgmt, size_t len)
 {
@@ -1141,8 +1191,130 @@ void ieee802_11_rx_wnm_action(struct wpa_supplicant *wpa_s,
 	case WNM_NOTIFICATION_REQ:
 		ieee802_11_rx_wnm_notif_req(wpa_s, mgmt->sa, pos, end - pos);
 		break;
+	case WNM_TFS_RESP:
+		ieee802_11_rx_wnmtfs_resp(wpa_s, pos, end - pos);
+		break;
+	case WNM_DMS_RESP:
+		ieee802_11_rx_wnmdms_resp(wpa_s, pos, end - pos);
+		break;
 	default:
 		wpa_printf(MSG_ERROR, "WNM: Unknown request");
 		break;
 	}
+}
+
+
+/* MLME-TFS.request */
+int ieee802_11_send_wnmtfs_req(struct wpa_supplicant *wpa_s, struct wpabuf *tfs_req)
+{
+	struct ieee80211_mgmt *mgmt;
+	int res;
+	size_t len;
+	u8 *wnmtfs_ie;
+	u16 wnmtfs_ie_len;  /* possibly multiple IE(s) */
+
+	/* TFS IE(s) */
+	wnmtfs_ie_len = wpabuf_len(tfs_req);
+	wnmtfs_ie = os_malloc(wnmtfs_ie_len);
+	if (wnmtfs_ie == NULL) {
+		return -1;
+	}
+
+	os_memcpy(wnmtfs_ie, wpabuf_head(tfs_req), wnmtfs_ie_len);
+
+	wpa_hexdump(MSG_DEBUG, "WNM: TFS Request element",
+		    (u8 *) wnmtfs_ie, wnmtfs_ie_len);
+
+	mgmt = os_zalloc(sizeof(*mgmt) + wnmtfs_ie_len);
+	if (mgmt == NULL) {
+		wpa_printf(MSG_DEBUG, "MLME: Failed to allocate buffer for "
+			   "WNM TFS Request action frame");
+		os_free(wnmtfs_ie);
+		return -1;
+	}
+
+	os_memcpy(mgmt->da, wpa_s->bssid, ETH_ALEN);
+	os_memcpy(mgmt->sa, wpa_s->own_addr, ETH_ALEN);
+	os_memcpy(mgmt->bssid, wpa_s->bssid, ETH_ALEN);
+	mgmt->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
+					   WLAN_FC_STYPE_ACTION);
+	mgmt->u.action.category = WLAN_ACTION_WNM;
+	mgmt->u.action.u.wnm_tfs_req.action = WNM_TFS_REQ;
+	mgmt->u.action.u.wnm_tfs_req.dialogtoken = 1;
+	mgmt->u.action.u.wnm_tfs_req.eid = WLAN_EID_TFS_REQ;
+	mgmt->u.action.u.wnm_tfs_req.len = wnmtfs_ie_len;
+	/* copy TFS IE here */
+	os_memcpy(mgmt->u.action.u.wnm_tfs_req.variable, wnmtfs_ie,
+		  wnmtfs_ie_len);
+
+	len = 1 + sizeof(mgmt->u.action.u.wnm_tfs_req) + 	wnmtfs_ie_len;
+
+	res = wpa_drv_send_action(wpa_s, wpa_s->assoc_freq, 0, wpa_s->bssid,
+				  wpa_s->own_addr, wpa_s->bssid,
+				  &mgmt->u.action.category, len, 0);
+	if (res < 0)
+		wpa_printf(MSG_DEBUG, "Failed to send WNM-TFS Request ");
+
+	os_free(wnmtfs_ie);
+	os_free(mgmt);
+
+	return res;
+}
+
+
+/* MLME-DMS.request */
+int ieee802_11_send_wnmdms_req(struct wpa_supplicant *wpa_s, struct wpabuf *dms_req)
+{
+	struct ieee80211_mgmt *mgmt;
+	int res;
+	size_t len;
+	u8 *wnmdms_ie;
+	u16 wnmdms_ie_len;  /* possibly multiple IE(s) */
+
+	/* TFS IE(s) */
+	wnmdms_ie_len = wpabuf_len(dms_req);
+	wnmdms_ie = os_malloc(wnmdms_ie_len);
+	if (wnmdms_ie == NULL) {
+		return -1;
+	}
+
+	os_memcpy(wnmdms_ie, wpabuf_head(dms_req), wnmdms_ie_len);
+
+	wpa_hexdump(MSG_DEBUG, "WNM: DMS Request element",
+		    (u8 *) wnmdms_ie, wnmdms_ie_len);
+
+	mgmt = os_zalloc(sizeof(*mgmt) + wnmdms_ie_len);
+	if (mgmt == NULL) {
+		wpa_printf(MSG_DEBUG, "MLME: Failed to allocate buffer for "
+			   "WNM DMS Request action frame");
+		os_free(wnmdms_ie);
+		return -1;
+	}
+
+	os_memcpy(mgmt->da, wpa_s->bssid, ETH_ALEN);
+	os_memcpy(mgmt->sa, wpa_s->own_addr, ETH_ALEN);
+	os_memcpy(mgmt->bssid, wpa_s->bssid, ETH_ALEN);
+	mgmt->frame_control = IEEE80211_FC(WLAN_FC_TYPE_MGMT,
+					   WLAN_FC_STYPE_ACTION);
+	mgmt->u.action.category = WLAN_ACTION_WNM;
+	mgmt->u.action.u.wnm_dms_req.action = WNM_DMS_REQ;
+	mgmt->u.action.u.wnm_dms_req.dialogtoken = 1;
+	mgmt->u.action.u.wnm_dms_req.eid = WLAN_EID_DMS_REQ;
+	mgmt->u.action.u.wnm_dms_req.len = wnmdms_ie_len;
+	/* copy DMS IE here */
+	os_memcpy(mgmt->u.action.u.wnm_dms_req.variable, wnmdms_ie,
+		  wnmdms_ie_len);
+
+	len = 1 + sizeof(mgmt->u.action.u.wnm_dms_req) + wnmdms_ie_len;
+
+	res = wpa_drv_send_action(wpa_s, wpa_s->assoc_freq, 0, wpa_s->bssid,
+				  wpa_s->own_addr, wpa_s->bssid,
+				  &mgmt->u.action.category, len, 0);
+	if (res < 0)
+		wpa_printf(MSG_DEBUG, "Failed to send WNM-DMS Request ");
+
+	os_free(wnmdms_ie);
+	os_free(mgmt);
+
+	return res;
 }

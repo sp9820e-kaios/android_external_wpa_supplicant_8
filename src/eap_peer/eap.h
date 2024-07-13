@@ -348,6 +348,9 @@ void eap_sm_set_ext_pw_ctx(struct eap_sm *sm, struct ext_password_data *ext);
 void eap_set_anon_id(struct eap_sm *sm, const u8 *id, size_t len);
 int eap_peer_was_failure_expected(struct eap_sm *sm);
 void eap_peer_erp_free_keys(struct eap_sm *sm);
+#ifdef CONFIG_ATCI
+int eap_sm_get_sim_slot(struct eap_sm *sm);
+#endif
 
 #endif /* IEEE8021X_EAPOL */
 

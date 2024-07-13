@@ -2744,6 +2744,24 @@ static int wpa_cli_cmd_wnm_bss_query(struct wpa_ctrl *ctrl, int argc, char *argv
 	return wpa_cli_cmd(ctrl, "WNM_BSS_QUERY", 1, argc, argv);
 }
 
+
+static int wpa_cli_cmd_wnm_tfs(struct wpa_ctrl *ctrl, int argc, char *argv[])
+{
+	return wpa_cli_cmd(ctrl, "WNM_TFS", 0, argc, argv);
+}
+
+
+static int wpa_cli_cmd_wnm_dms(struct wpa_ctrl *ctrl, int argc, char *argv[])
+{
+	return wpa_cli_cmd(ctrl, "WNM_DMS", 0, argc, argv);
+}
+
+
+static int wpa_cli_cmd_wnm_getmaxidle(struct wpa_ctrl *ctrl, int argc, char *argv[])
+{
+	return wpa_cli_cmd(ctrl, "WNM_GET_MAXIDLEs", 0, argc, argv);
+}
+
 #endif /* CONFIG_WNM */
 
 
@@ -3329,6 +3347,12 @@ static const struct wpa_cli_cmd wpa_cli_commands[] = {
 	  "<enter/exit> [interval=#] = enter/exit WNM-Sleep mode" },
 	{ "wnm_bss_query", wpa_cli_cmd_wnm_bss_query, NULL, cli_cmd_flag_none,
 	  "<query reason> = Send BSS Transition Management Query" },
+	{ "wnm_tfs", wpa_cli_cmd_wnm_tfs, NULL, cli_cmd_flag_none,
+	  "tfs_req=tfs_ie, send tfs request" },
+	{ "wnm_dms", wpa_cli_cmd_wnm_dms, NULL, cli_cmd_flag_none,
+	  "dms_req=dms_ie, send dms request" },
+	{ "wnm_get_maxidle", wpa_cli_cmd_wnm_getmaxidle, NULL, cli_cmd_flag_none,
+	  "get bss max idle period" },
 #endif /* CONFIG_WNM */
 	{ "raw", wpa_cli_cmd_raw, NULL, cli_cmd_flag_sensitive,
 	  "<params..> = Sent unprocessed command" },

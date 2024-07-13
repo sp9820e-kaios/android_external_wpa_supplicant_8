@@ -188,3 +188,10 @@ int android_nl_socket_set_nonblocking(struct nl_handle *handle)
 }
 
 
+//NOTE: Add for HOSTAPD_ADVANCE -->
+int android_driver_priv_cmd(struct i802_bss *bss, const char *cmd)
+{
+	return android_priv_cmd(bss, cmd);
+}
+//<-- Add for HOSTAPD_ADVANCE
+

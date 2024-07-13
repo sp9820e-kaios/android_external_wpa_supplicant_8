@@ -238,6 +238,15 @@ int android_pno_stop(struct i802_bss *bss);
 extern int wpa_driver_nl80211_driver_cmd(void *priv, char *cmd, char *buf,
 					 size_t buf_len);
 
+#ifndef CONFIG_BCMDHD
+extern int wpa_driver_nl80211_driver_cmd_wnm(void *priv, enum wnm_oper oper, const u8 *peer,
+			u8 *buf, u16 *buf_len);
+#endif
+
+//NOTE: Add for HOSTAPD_ADVANCE -->
+int android_driver_priv_cmd(struct i802_bss *bss, const char *cmd);
+//<-- Add for HOSTAPD_ADVANCE
+
 #ifdef ANDROID_P2P
 int wpa_driver_set_p2p_noa(void *priv, u8 count, int start, int duration);
 int wpa_driver_get_p2p_noa(void *priv, u8 *buf, size_t len);
@@ -246,6 +255,11 @@ int wpa_driver_set_ap_wps_p2p_ie(void *priv, const struct wpabuf *beacon,
 				 const struct wpabuf *proberesp,
 				 const struct wpabuf *assocresp);
 #endif /* ANDROID_P2P */
+
+#ifdef CONFIG_BCMDHD
+int wpa_driver_set_ap_mac_list(void *priv, u8 mac_list[][ETH_ALEN], u8 mac_num, u8 macaddr_acl);
+int wpa_driver_set_max_sta(void *priv, int max_sta);
+#endif
 #endif /* ANDROID */
 
 

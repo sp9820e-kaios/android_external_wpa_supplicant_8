@@ -1157,7 +1157,36 @@ static void hostapd_set_acl(struct hostapd_data *hapd)
 	struct hostapd_config *conf = hapd->iconf;
 	int err;
 	u8 accept_acl;
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+	int i = 0;
+	char buf[25];
+	char reply[10];
 
+#ifndef CONFIG_BCMDHD
+	os_memset(buf, 0, 25);
+	os_strncpy(buf, "WHITE_ADD_ONCE ", 15);
+	while(i < conf->bss[0]->num_accept_mac){
+		wpa_printf(MSG_INFO, "accept mac:" MACSTR, MAC2STR(conf->bss[0]->accept_mac[i].addr));
+		os_memcpy(buf+15, conf->bss[0]->accept_mac[i].addr, ETH_ALEN);
+		i++;
+		err = hapd->driver->ap_priv_cmd(hapd->drv_priv, buf, reply, 10);
+		if(err < 0){
+			wpa_printf(MSG_ERROR, "WHITE_ADD_ONCE failed.");
+			return;
+		}
+	}
+#endif
+
+	if (conf->bss[0]->macaddr_acl == DENY_UNLESS_ACCEPTED) {
+		os_memset(buf, 0, 25);
+		os_strncpy(buf, "WHITE_EN_ONCE ", 14);
+		err = hapd->driver->ap_priv_cmd(hapd->drv_priv, buf, reply, 10);
+		if (err < 0){
+			wpa_printf(MSG_ERROR, "WHITE_EN_ONCE failed.");
+			return;
+		}
+	}
+#else
 	if (hapd->iface->drv_max_acl_mac_addrs == 0)
 		return;
 
@@ -1180,6 +1209,7 @@ static void hostapd_set_acl(struct hostapd_data *hapd)
 			return;
 		}
 	}
+#endif
 }
 
 
@@ -1619,6 +1649,9 @@ static void hostapd_bss_deinit(struct hostapd_data *hapd)
 {
 	wpa_printf(MSG_DEBUG, "%s: deinit bss %s", __func__,
 		   hapd->conf->iface);
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+	wpa_msg(hapd->msg_ctx, MSG_INFO, "AP-TERMINATING");
+ #endif
 	hostapd_bss_deinit_no_free(hapd);
 	wpa_msg(hapd->msg_ctx, MSG_INFO, AP_EVENT_DISABLED);
 	hostapd_cleanup(hapd);

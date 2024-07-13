@@ -3386,6 +3386,11 @@ struct wpa_driver_ops {
 	 * indicates support for such offloading (WPA_DRIVER_FLAGS_ACS_OFFLOAD).
 	 */
 	int (*do_acs)(void *priv, struct drv_acs_params *params);
+
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+	int (*ap_priv_cmd)(void *priv, char *cmd, char *buf, size_t buf_len);
+#endif
+
 };
 
 

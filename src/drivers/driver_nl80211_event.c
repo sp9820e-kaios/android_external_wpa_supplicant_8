@@ -260,6 +260,37 @@ static void mlme_event_assoc(struct wpa_driver_nl80211_data *drv,
 	wpa_supplicant_event(drv->ctx, EVENT_ASSOC, &event);
 }
 
+/*
+ * wmm_parse_qosinfo - Parse qosinfo from ies
+ * @buf: Pointer to the ies buffer
+ * @len: ies total len
+ * @qosinfo: Pointer to the qosinfo
+ * Returns: find
+ */
+int wmm_parse_qosinfo(const u8 *buf, size_t len, u8 *qosinfo)
+{
+	const u8 *pos, *end;
+	int find = 0;
+
+	for (pos = buf, end = pos + len; pos + 1 < end; pos += 2 + pos[1]) {
+		if (pos + 2 + pos[1] > end) {
+			wpa_printf(MSG_DEBUG,
+					"nl80211: WMM IE data underflow (ie=%d len=%d pos=%d)",
+					pos[0], pos[1], (int) (pos - buf));
+			break;
+		}
+		if (*pos == WLAN_EID_VENDOR_SPECIFIC && pos[1] >= 7) {
+			if (WPA_GET_BE32(&pos[2]) == WMM_IE_VENDOR_TYPE) {
+				*qosinfo = pos[8] & WMM_QOSINFO_STA_AC_MASK;
+				find = 1;
+				wpa_printf(MSG_DEBUG,"nl80211: QOS info (0x%x) is found\n",
+						*qosinfo);
+				break;
+			}
+		}
+	}
+	return find;
+}
 
 static void mlme_event_connect(struct wpa_driver_nl80211_data *drv,
 			       enum nl80211_commands cmd, struct nlattr *status,
@@ -332,6 +363,13 @@ static void mlme_event_connect(struct wpa_driver_nl80211_data *drv,
 	if (req_ie) {
 		event.assoc_info.req_ies = nla_data(req_ie);
 		event.assoc_info.req_ies_len = nla_len(req_ie);
+
+		if (wmm_parse_qosinfo(event.assoc_info.req_ies,
+					event.assoc_info.req_ies_len,
+					&(event.assoc_info.wmm_params.uapsd_queues))) {
+			event.assoc_info.wmm_params.info_bitmap |=
+				WMM_PARAMS_UAPSD_QUEUES_INFO;
+		}
 
 		if (cmd == NL80211_CMD_ROAM) {
 			ssid = nl80211_get_ie(event.assoc_info.req_ies,

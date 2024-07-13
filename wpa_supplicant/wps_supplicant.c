@@ -36,7 +36,7 @@
 
 
 #ifndef WPS_PIN_SCAN_IGNORE_SEL_REG
-#define WPS_PIN_SCAN_IGNORE_SEL_REG 3
+#define WPS_PIN_SCAN_IGNORE_SEL_REG 20
 #endif /* WPS_PIN_SCAN_IGNORE_SEL_REG */
 
 /*
@@ -517,7 +517,8 @@ static int wpa_supplicant_wps_cred(void *ctx,
 	case WPS_AUTH_WPA2PSK:
 		ssid->auth_alg = WPA_AUTH_ALG_OPEN;
 		ssid->key_mgmt = WPA_KEY_MGMT_PSK;
-		ssid->proto = WPA_PROTO_RSN;
+		//handle the case of receiving the wpa2-psk credential from the wpa-psk ap
+		//ssid->proto = WPA_PROTO_RSN;
 		break;
 	}
 

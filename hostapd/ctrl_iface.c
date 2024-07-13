@@ -1851,7 +1851,14 @@ static void hostapd_ctrl_iface_receive(int sock, void *eloop_ctx,
 				       void *sock_ctx)
 {
 	struct hostapd_data *hapd = eloop_ctx;
+
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+	char *buf;
+	char buffer[4096];
+#else
 	char buf[4096];
+#endif
+
 	int res;
 	struct sockaddr_un from;
 	socklen_t fromlen = sizeof(from);
@@ -1860,6 +1867,32 @@ static void hostapd_ctrl_iface_receive(int sock, void *eloop_ctx,
 	int reply_len;
 	int level = MSG_DEBUG;
 
+// android5.1 the command may contain the IFNAME
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+	res = recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
+		(struct sockaddr *) &from, &fromlen);
+	if (res < 0) {
+		wpa_printf(MSG_ERROR, "recvfrom(ctrl_iface): %s",
+			   strerror(errno));
+		return;
+	}
+	buffer[res] = '\0';
+
+	buf = buffer;
+
+	wpa_printf(level, "Recv command: %s ", buffer);
+	if (os_strncmp(buffer, "IFNAME=", 7) == 0) {
+		buf = os_strchr(buffer + 7, ' ');
+		if (buf) {
+			*buf++ = '\0';
+		}
+	}
+
+	wpa_printf(level, "222Recv command: %s ", buf);
+	if (os_strcmp(buf, "PING") == 0)
+		level = MSG_EXCESSIVE;
+	wpa_hexdump_ascii(level, "RX ctrl_iface", (u8 *) buf, res);
+#else
 	res = recvfrom(sock, buf, sizeof(buf) - 1, 0,
 		       (struct sockaddr *) &from, &fromlen);
 	if (res < 0) {
@@ -1871,6 +1904,7 @@ static void hostapd_ctrl_iface_receive(int sock, void *eloop_ctx,
 	if (os_strcmp(buf, "PING") == 0)
 		level = MSG_EXCESSIVE;
 	wpa_hexdump_ascii(level, "RX ctrl_iface", (u8 *) buf, res);
+#endif
 
 	reply = os_malloc(reply_size);
 	if (reply == NULL) {
@@ -2091,6 +2125,13 @@ static void hostapd_ctrl_iface_receive(int sock, void *eloop_ctx,
 #ifdef RADIUS_SERVER
 		radius_server_erp_flush(hapd->radius_srv);
 #endif /* RADIUS_SERVER */
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+	} else if (os_strncmp(buf, "DRIVER ", 7) == 0) {
+		if (!hapd->driver->ap_priv_cmd)
+			reply_len = -1;
+		else
+			reply_len = hapd->driver->ap_priv_cmd(hapd->drv_priv, buf + 7, reply, reply_size);
+#endif
 	} else {
 		os_memcpy(reply, "UNKNOWN COMMAND\n", 16);
 		reply_len = 16;

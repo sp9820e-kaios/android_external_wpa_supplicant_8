@@ -32,6 +32,20 @@ ifeq ($(BOARD_WPA_SUPPLICANT_PRIVATE_LIB),)
 L_CFLAGS += -DANDROID_LIB_STUB
 endif
 
+ifeq ($(BOARD_WLAN_DEVICE), sc2351)
+L_CFLAGS += -DCONFIG_SC2351
+endif
+
+ifeq ($(BOARD_WLAN_DEVICE), bcmdhd)
+L_CFLAGS += -DCONFIG_BCMDHD
+endif
+
+ifeq ($(BOARD_WLAN_DEVICE), sc2332)
+L_CFLAGS += -DCONFIG_SC2332
+else ifeq ($(BOARD_WLAN_DEVICE), sp9832e)
+L_CFLAGS += -DCONFIG_SC2332
+endif
+
 # Disable roaming in wpa_supplicant
 ifdef CONFIG_NO_ROAMING
 L_CFLAGS += -DCONFIG_NO_ROAMING
@@ -66,6 +80,7 @@ INCLUDES += $(LOCAL_PATH)/src/tls
 INCLUDES += $(LOCAL_PATH)/src/utils
 INCLUDES += $(LOCAL_PATH)/src/wps
 INCLUDES += system/security/keystore/include
+
 ifdef CONFIG_DRIVER_NL80211
 ifneq ($(wildcard external/libnl),)
 INCLUDES += external/libnl/include
@@ -966,6 +981,7 @@ ifeq ($(CONFIG_TLS), openssl)
 ifdef TLS_FUNCS
 L_CFLAGS += -DEAP_TLS_OPENSSL
 OBJS += src/crypto/tls_openssl.c
+OBJS += src/crypto/tls_openssl_ocsp.c
 LIBS += -lssl
 endif
 OBJS += src/crypto/crypto_openssl.c
@@ -1579,6 +1595,28 @@ else
 LOCAL_STATIC_LIBRARIES += libnl_2
 endif
 endif
+
+# SPRD Wi-Fi configurations start
+
+#ATCI configurations start
+#L_CFLAGS += -DCONFIG_ATCI
+#INCLUDES += vendor/sprd/open-source/libs/libatci
+#INCLUDES += $(LOCAL_PATH)/src/sim
+#OBJS += src/sim/attok.c
+#OBJS += src/sim/send_at.c
+#OBJS += src/sim/sim_funcs.c
+#LOCAL_SHARED_LIBRARIES += libatci
+#ATCI configurations end
+
+#WAPI configurations start
+L_CFLAGS += -DCONFIG_WAPI
+INCLUDES += ../wapi_lib/wapi_interface.h
+OBJS += src/wapi/wapi_interface_priv.c
+LOCAL_STATIC_LIBRARIES += libwapi
+#WAPI configurations end
+L_CFLAGS += -DCONFIG_LOG_OPTIMIZATIOIN
+# SPRD Wi-Fi configurations end
+
 LOCAL_CFLAGS := $(L_CFLAGS)
 LOCAL_SRC_FILES := $(OBJS)
 LOCAL_C_INCLUDES := $(INCLUDES)

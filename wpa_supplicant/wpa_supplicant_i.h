@@ -16,6 +16,11 @@
 #include "wps/wps_defs.h"
 #include "config_ssid.h"
 #include "wmm_ac.h"
+#ifdef CONFIG_WAPI
+#include "../wapi_lib/wapi_interface.h"
+#include "wapi/wapi_interface_priv.h"
+struct wpa_global *global_priv;
+#endif
 
 extern const char *const wpa_supplicant_version;
 extern const char *const wpa_supplicant_license;
@@ -656,6 +661,7 @@ struct wpa_supplicant {
 	unsigned int reattach:1; /* reassociation to the same BSS requested */
 	unsigned int mac_addr_changed:1;
 	unsigned int added_vif:1;
+	unsigned int wnmsleep_used:1;
 
 	struct os_reltime last_mac_addr_change;
 	int last_mac_addr_style;
@@ -977,6 +983,11 @@ struct wpa_supplicant {
 	u8 last_tspecs_count;
 
 	struct rrm_data rrm;
+#ifdef CONFIG_WAPI
+	struct l2_packet_data *l2_wapi;
+	u8 assoc_wapi_ie[256];
+	u8 assoc_wapi_ie_len;
+#endif
 };
 
 

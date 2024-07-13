@@ -2500,6 +2500,25 @@ static int wpa_supplicant_ctrl_iface_scan_result(
 	if (osen_ie)
 		pos = wpa_supplicant_ie_txt(pos, end, "OSEN",
 					    osen_ie, 2 + osen_ie[1]);
+#ifdef CONFIG_WAPI
+	if(!ie && !ie2) {
+		ie = wpa_bss_get_ie(bss, WLAN_EID_WAPI);
+		if (ie) {
+			if (ie[9] == 2) {
+				wpa_printf(MSG_DEBUG, "WAPI: This is a WAPI PSK network");
+				ret = os_snprintf(pos, end - pos, "[WAPI-PSK]");
+			} else if (ie[9] == 1) {
+				wpa_printf(MSG_DEBUG, "WAPI: This is a WAPI CERT network");
+				ret = os_snprintf(pos, end - pos, "[WAPI-CERT]");
+			} else {
+				wpa_printf(MSG_ERROR, "WAPI: Unknown WAPI network type");
+				ret = os_snprintf(pos, end - pos, "[WAPI-Unknown]");
+			}
+			if (ret < 0 || ret >= end - pos) return -1;
+			pos += ret;
+		}
+	}
+#endif
 	pos = wpa_supplicant_wps_ie_txt(wpa_s, pos, end, bss);
 	if (!ie && !ie2 && !osen_ie && (bss->caps & IEEE80211_CAP_PRIVACY)) {
 		ret = os_snprintf(pos, end - pos, "[WEP]");
@@ -4100,6 +4119,25 @@ static int print_bss_info(struct wpa_supplicant *wpa_s, struct wpa_bss *bss,
 		if (osen_ie)
 			pos = wpa_supplicant_ie_txt(pos, end, "OSEN",
 						    osen_ie, 2 + osen_ie[1]);
+#ifdef CONFIG_WAPI
+		if(!ie && !ie2) {
+			ie = wpa_bss_get_ie(bss, WLAN_EID_WAPI);
+			if (ie) {
+				if (ie[9] == 2) {
+					wpa_printf(MSG_DEBUG, "WAPI: This is a WAPI PSK network");
+					ret = os_snprintf(pos, end - pos, "[WAPI-PSK]");
+				} else if (ie[9] == 1) {
+					wpa_printf(MSG_DEBUG, "WAPI: This is a WAPI CERT network");
+					ret = os_snprintf(pos, end - pos, "[WAPI-CERT]");
+				} else {
+					wpa_printf(MSG_ERROR, "WAPI: Unknown WAPI network type");
+					ret = os_snprintf(pos, end - pos, "[WAPI-Unknown]");
+				}
+				if (ret < 0 || ret >= end - pos) return -1;
+				pos += ret;
+			}
+		}
+#endif
 		pos = wpa_supplicant_wps_ie_txt(wpa_s, pos, end, bss);
 		if (!ie && !ie2 && !osen_ie &&
 		    (bss->caps & IEEE80211_CAP_PRIVACY)) {
@@ -6483,6 +6521,84 @@ static int wpas_ctrl_iface_wnm_bss_query(struct wpa_supplicant *wpa_s, char *cmd
 	return wnm_send_bss_transition_mgmt_query(wpa_s, query_reason);
 }
 
+
+static int wpas_ctrl_iface_wnm_tfs(struct wpa_supplicant *wpa_s, char *cmd)
+{
+	int enter;
+	int intval = 0;
+	char *pos;
+	int ret;
+	struct wpabuf *tfs_req = NULL;
+
+	pos = os_strstr(cmd, " tfs_req=");
+	if (pos) {
+		char *end;
+		size_t len;
+		pos += 9;
+		end = os_strchr(pos, ' ');
+		if (end)
+			len = end - pos;
+		else
+			len = os_strlen(pos);
+		if (len & 1)
+			return -1;
+		len /= 2;
+		tfs_req = wpabuf_alloc(len);
+		if (tfs_req == NULL)
+			return -1;
+		if (hexstr2bin(pos, wpabuf_put(tfs_req, len), len) < 0) {
+			wpabuf_free(tfs_req);
+			return -1;
+		}
+	}
+
+	if (tfs_req == NULL)
+		return -1;
+	ret = ieee802_11_send_wnmtfs_req(wpa_s, tfs_req);
+	wpabuf_free(tfs_req);
+
+	return ret;
+}
+
+
+static int wpas_ctrl_iface_wnm_dms(struct wpa_supplicant *wpa_s, char *cmd)
+{
+	int enter;
+	int intval = 0;
+	char *pos;
+	int ret;
+	struct wpabuf *dms_req = NULL;
+
+	pos = os_strstr(cmd, " dms_req=");
+	if (pos) {
+		char *end;
+		size_t len;
+		pos += 9;
+		end = os_strchr(pos, ' ');
+		if (end)
+			len = end - pos;
+		else
+			len = os_strlen(pos);
+		if (len & 1)
+			return -1;
+		len /= 2;
+		dms_req = wpabuf_alloc(len);
+		if (dms_req == NULL)
+			return -1;
+		if (hexstr2bin(pos, wpabuf_put(dms_req, len), len) < 0) {
+			wpabuf_free(dms_req);
+			return -1;
+		}
+	}
+
+	if (dms_req == NULL)
+		return -1;
+	ret = ieee802_11_send_wnmdms_req(wpa_s, dms_req);
+	wpabuf_free(dms_req);
+
+	return ret;
+}
+
 #endif /* CONFIG_WNM */
 
 
@@ -6756,6 +6872,7 @@ static void wpa_supplicant_ctrl_iface_flush(struct wpa_supplicant *wpa_s)
 	}
 
 	eloop_cancel_timeout(wpas_network_reenabled, wpa_s, NULL);
+	wpa_s->wnmsleep_used = 0;
 }
 
 
@@ -7946,6 +8063,30 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 	const int reply_size = 4096;
 	int reply_len;
 
+#if defined(CONFIG_SC2351)
+	struct wpa_supplicant *iface;
+	/* force disconnect p2p connection when user try to do legacy connection */
+	if (os_strncmp(buf, "SELECT_NETWORK ", 15) == 0) {
+		for (iface = wpa_s->global->ifaces; iface; iface = iface->next) {
+			if(os_strcmp(iface->ifname, "p2p0")==0) {
+				wpas_p2p_disconnect(iface);
+				os_memset(iface->p2p_auth_invite, 0, ETH_ALEN);
+			}
+		}
+	}
+	/* force disconnect legacy connection when user try to do p2p connection */
+	if (os_strncmp(buf, "P2P_CONNECT ", 12) == 0 ||
+		os_strncmp(buf, "P2P_INVITE ", 11) == 0 ||
+		os_strncmp(buf, "P2P_GROUP_ADD ", 14) == 0) {
+		for (iface = wpa_s->global->ifaces; iface; iface = iface->next) {
+			if(os_strcmp(iface->ifname, "wlan0")==0) {
+				wpa_supplicant_disable_network(iface, NULL);
+				wpa_s->disconnected = 1;
+			}
+		}
+	}
+#endif
+
 	if (os_strncmp(buf, WPA_CTRL_RSP, os_strlen(WPA_CTRL_RSP)) == 0 ||
 	    os_strncmp(buf, "SET_NETWORK ", 12) == 0) {
 		if (wpa_debug_show_keys)
@@ -7965,6 +8106,9 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 		int level = MSG_DEBUG;
 		if (os_strcmp(buf, "PING") == 0)
 			level = MSG_EXCESSIVE;
+#ifdef CONFIG_LOG_OPTIMIZATIOIN
+		if(os_strcmp(buf, "SIGNAL_POLL") != 0)
+#endif
 		wpa_dbg(wpa_s, level, "Control interface command '%s'", buf);
 	}
 
@@ -8547,6 +8691,14 @@ char * wpa_supplicant_ctrl_iface_process(struct wpa_supplicant *wpa_s,
 	} else if (os_strncmp(buf, "WNM_BSS_QUERY ", 14) == 0) {
 		if (wpas_ctrl_iface_wnm_bss_query(wpa_s, buf + 14))
 				reply_len = -1;
+	}else if(os_strncmp(buf, "WNM_TFS ", 8) == 0){
+		if (wpas_ctrl_iface_wnm_tfs(wpa_s, buf + 8))
+			reply_len = -1;
+	}else if(os_strncmp(buf, "WNM_DMS ", 8) == 0){
+		if (wpas_ctrl_iface_wnm_dms(wpa_s, buf + 8))
+			reply_len = -1;
+	}else if(os_strncmp(buf, "WNM_GET_MAXIDLE", 15) == 0){
+		reply_len = os_snprintf(reply, reply_size, "bss max idle period: %u (* 1000 TU)", wpa_s->sme.bss_max_idle_period);
 #endif /* CONFIG_WNM */
 	} else if (os_strcmp(buf, "FLUSH") == 0) {
 		wpa_supplicant_ctrl_iface_flush(wpa_s);

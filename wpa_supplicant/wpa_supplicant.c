@@ -106,6 +106,9 @@ const char *const wpa_supplicant_full_license5 =
 "OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n"
 "\n";
 #endif /* CONFIG_NO_STDOUT_DEBUG */
+#ifdef CONFIG_WAPI
+extern struct wpa_global *global_priv;
+#endif
 
 /* Configure default/group WEP keys for static WEP */
 int wpa_set_wep_keys(struct wpa_supplicant *wpa_s, struct wpa_ssid *ssid)
@@ -408,6 +411,10 @@ static void wpa_supplicant_cleanup(struct wpa_supplicant *wpa_s)
 	eapol_sm_register_scard_ctx(wpa_s->eapol, NULL);
 	l2_packet_deinit(wpa_s->l2);
 	wpa_s->l2 = NULL;
+#ifdef CONFIG_WAPI
+	l2_packet_deinit(wpa_s->l2_wapi);
+	wpa_s->l2_wapi = NULL;
+#endif
 	if (wpa_s->l2_br) {
 		l2_packet_deinit(wpa_s->l2_br);
 		wpa_s->l2_br = NULL;
@@ -2018,6 +2025,74 @@ static void wpas_start_assoc_cb(struct wpa_radio_work *work, int deinit)
 	wpa_supplicant_cancel_sched_scan(wpa_s);
 	wpa_supplicant_cancel_scan(wpa_s);
 
+#ifdef CONFIG_WAPI
+	if (ssid->proto & WPA_PROTO_WAPI) { /* associating to a WAPI network */
+		/* Begin of initialize wapi lib parameters */
+		CNTAP_PARA lib_param;
+		char *wapi_cert_name = "/data/misc/wifi/wapi_merge.cer";
+		if (ssid->key_mgmt & WPA_KEY_MGMT_WAPI_CERT) lib_param.authType = AUTH_TYPE_WAPI;
+		else if (ssid->key_mgmt & WPA_KEY_MGMT_WAPI_PSK) lib_param.authType = AUTH_TYPE_WAPI_PSK;
+		else lib_param.authType = AUTH_TYPE_NONE_WAPI;
+		if (ssid->key_mgmt & WPA_KEY_MGMT_WAPI_CERT) {
+			if ( (ssid->wapi_as_cert) && (ssid->wapi_user_cert) ) {
+				/* create merged cert using the specific file name */
+				if (wapi_merge_cert_files(ssid->wapi_as_cert, ssid->wapi_user_cert, wapi_cert_name)) {
+					wpa_printf(MSG_ERROR, "%s: wapi_merge_cert_files() failed, exit...\n", __FUNCTION__);
+					wpas_connect_work_done(wpa_s);
+					return;
+				}
+				/* merge the as.cer with user.cer to make a mixed.cer */
+				change_cert_format(wapi_cert_name, lib_param.para.user, 2048, lib_param.para.as, 2048);
+			} else {
+				wpas_connect_work_done(wpa_s);
+				wpa_printf(MSG_ERROR, "WAPI: %s: wapi cert mode but no enough cert files, quit association\n", __FUNCTION__);
+				return;
+			}
+		}
+		if (ssid->key_mgmt & WPA_KEY_MGMT_WAPI_PSK) {
+			if(ssid->passphrase == NULL) return;
+			lib_param.para.kt = ssid->psk_key_type;
+			lib_param.para.kl = strlen(ssid->passphrase);
+			memcpy(lib_param.para.kv, ssid->passphrase, lib_param.para.kl);
+		}
+		if (WAI_CNTAPPARA_SET(&lib_param) != 0) {
+			wpa_printf(MSG_DEBUG, "WAPI: %s: WAI_CNTAPPARA_SET error\n", __FUNCTION__);
+			wpas_connect_work_done(wpa_s);
+			return;
+		}
+		/* End of initialize wapi lib parameters */
+
+		if (bss) {
+			/* set parameters to driver */
+			params.ssid = bss->ssid;
+			params.ssid_len = bss->ssid_len;
+			params.bssid = bss->bssid;
+			params.freq.freq = bss->freq;
+			params.mode = ssid->mode;
+			params.auth_alg = ssid->auth_alg;
+			params.wpa_proto = ssid->proto;
+			params.key_mgmt_suite = ssid->key_mgmt;
+			params.pairwise_suite = WPA_CIPHER_SMS4;
+			params.group_suite = WPA_CIPHER_SMS4;
+			params.wpa_ie = wpa_s->assoc_wapi_ie;
+			params.wpa_ie_len = wpa_s->assoc_wapi_ie_len;
+		} else {
+			wpa_printf(MSG_DEBUG, "bss=null\n");
+			wpas_connect_work_done(wpa_s);
+			return;
+		}
+
+		if (!memcmp(wpa_s->bssid, "\x00\x00\x00\x00\x00\x00", ETH_ALEN)) {
+			wpa_supplicant_req_auth_timeout(wpa_s, 20, 0);
+			wpa_supplicant_set_state(wpa_s, WPA_ASSOCIATING);
+			if (wpa_drv_associate(wpa_s, &params))
+				wpa_printf(MSG_ERROR, "WAPI: wapi_drv_associate() failed\n");
+		}
+		wpa_s->current_ssid = ssid;
+		wpa_s->current_bss = bss;
+		return;
+	}
+#endif
 	/* Starting new association, so clear the possibly used WPA IE from the
 	 * previous association. */
 	wpa_sm_set_assoc_wpa_ie(wpa_s->wpa, NULL, 0);
@@ -3256,6 +3331,19 @@ int wpa_supplicant_driver_init(struct wpa_supplicant *wpa_s)
 	if (wpa_supplicant_update_mac_addr(wpa_s) < 0)
 		return -1;
 
+#ifdef CONFIG_WAPI
+		if(os_strcmp(wpa_s->ifname,"wlan0") == 0) {
+			/*wapi only works under station mode*/
+			wpa_printf(MSG_DEBUG, "WAPI: Create layer2 socket for WAI TX/RX ");
+			wpa_s->l2_wapi = l2_packet_init(wpa_s->ifname,
+							wpa_drv_get_mac_addr(wpa_s),
+							ETH_P_WAI,
+							wapi_rx_wai, wpa_s, 0);
+			if (wpa_s->l2_wapi == NULL)
+				return -1;
+		}
+#endif
+
 	wpa_dbg(wpa_s, MSG_DEBUG, "Own MAC address: " MACSTR,
 		MAC2STR(wpa_s->own_addr));
 	os_memcpy(wpa_s->perm_addr, wpa_s->own_addr, ETH_ALEN);
@@ -4054,6 +4142,15 @@ static int wpa_supplicant_init_iface(struct wpa_supplicant *wpa_s,
 		wpa_s->confname = os_strdup(iface->confname);
 #endif /* CONFIG_BACKEND_FILE */
 		wpa_s->conf = wpa_config_read(wpa_s->confname, NULL);
+#ifdef CONFIG_WAPI
+		if(os_strcmp(iface->ifname, "wlan0") == 0) {
+			wpa_printf(MSG_DEBUG, "WAPI:  WIFI_lib_init \n");
+			if (WIFI_lib_init()) {
+				wpa_printf(MSG_ERROR, "WAPI: WIFI_lib_init failed\n");
+				return -1;
+			}
+		}
+#endif
 		if (wpa_s->conf == NULL) {
 			wpa_printf(MSG_ERROR, "Failed to read or parse "
 				   "configuration '%s'.", wpa_s->confname);
@@ -4447,7 +4544,7 @@ struct wpa_supplicant * wpa_supplicant_add_iface(struct wpa_global *global,
 	wpa_dbg(wpa_s, MSG_DEBUG, "Added interface %s", wpa_s->ifname);
 	wpa_supplicant_set_state(wpa_s, WPA_DISCONNECTED);
 
-#ifdef CONFIG_P2P
+#ifndef CONFIG_P2P
 	if (wpa_s->global->p2p == NULL &&
 	    !wpa_s->global->p2p_disabled && !wpa_s->conf->p2p_disabled &&
 	    (wpa_s->drv_flags & WPA_DRIVER_FLAGS_DEDICATED_P2P_DEVICE) &&
@@ -4664,6 +4761,9 @@ struct wpa_global * wpa_supplicant_init(struct wpa_params *params)
 
 	wpa_printf(MSG_DEBUG, "wpa_supplicant v" VERSION_STR);
 
+#ifdef CONFIG_WAPI
+	global_priv = global;
+#endif
 	if (eloop_init()) {
 		wpa_printf(MSG_ERROR, "Failed to initialize event loop");
 		wpa_supplicant_deinit(global);
@@ -4755,6 +4855,9 @@ void wpa_supplicant_deinit(struct wpa_global *global)
 	if (global == NULL)
 		return;
 
+#ifdef CONFIG_WAPI
+	WIFI_lib_exit();
+#endif
 #ifdef CONFIG_WIFI_DISPLAY
 	wifi_display_deinit(global);
 #endif /* CONFIG_WIFI_DISPLAY */
@@ -5493,6 +5596,8 @@ int wpas_rrm_send_neighbor_rep_request(struct wpa_supplicant *wpa_s,
 {
 	struct wpabuf *buf;
 	const u8 *rrm_ie;
+	wpa_s->rrm.rrm_used = wpa_s->conf->rrm;
+	wpa_printf(MSG_DEBUG, "wpa_s->rrm.rrm_used %d;wpa_s->conf->rrm %d",wpa_s->rrm.rrm_used,wpa_s->conf->rrm);
 
 	if (wpa_s->wpa_state != WPA_COMPLETED || wpa_s->current_ssid == NULL) {
 		wpa_printf(MSG_DEBUG, "RRM: No connection, no RRM.");

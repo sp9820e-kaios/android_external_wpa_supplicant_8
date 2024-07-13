@@ -2159,6 +2159,42 @@ int p2p_match_dev_type(struct p2p_data *p2p, struct wpabuf *wps)
 	return 0;
 }
 
+static void p2p_add_capability(struct wpabuf *buf, struct p2p_data *p2p)
+{
+	struct p2p_device *dev, *n;
+	struct p2p_group *group;
+	size_t i;
+	int p2p_go = 0;
+
+	dl_list_for_each_safe(dev, n, &p2p->devices, struct p2p_device, list) {
+		if (p2p->cfg->go_connected &&
+		    p2p->cfg->go_connected(p2p->cfg->cb_ctx,
+					   dev->info.p2p_device_addr)) {
+			/* We are connected as a client to a group in which the peer is the GO. */
+			break;
+		}
+
+		for (i = 0; i < p2p->num_groups; i++) {
+			if (p2p_group_is_client_connected(
+				    p2p->groups[i], dev->info.p2p_device_addr))
+				break;
+		}
+		if (i < p2p->num_groups) {
+			/* The peer is connected as a client in a group where we are the GO. */
+			group = p2p->groups[i];
+			p2p_go = 1;
+			break;
+		}
+	}
+
+	if(p2p_go) {
+		p2p_group_add_common_ies(group, buf);
+	} else {
+		p2p_buf_add_capability(buf, p2p->dev_capab &
+			       ~P2P_DEV_CAPAB_CLIENT_DISCOVERABILITY, 0);
+	}
+
+}
 
 struct wpabuf * p2p_build_probe_resp_ies(struct p2p_data *p2p,
 					 const u8 *query_hash,
@@ -2206,8 +2242,8 @@ struct wpabuf * p2p_build_probe_resp_ies(struct p2p_data *p2p,
 
 	/* P2P IE */
 	len = p2p_buf_add_ie_hdr(buf);
-	p2p_buf_add_capability(buf, p2p->dev_capab &
-			       ~P2P_DEV_CAPAB_CLIENT_DISCOVERABILITY, 0);
+	p2p_add_capability(buf, p2p);
+
 	if (p2p->ext_listen_interval)
 		p2p_buf_add_ext_listen_timing(buf, p2p->ext_listen_period,
 					      p2p->ext_listen_interval);
@@ -3801,6 +3837,10 @@ int p2p_listen_end(struct p2p_data *p2p, unsigned int freq)
 		return 1;
 	}
 
+	/* Sprd Bug#447946 20150618 Bgn */
+	p2p->pending_listen_freq = 0;
+	/* Sprd Bug#447946 20150618 End */
+
 	return 0;
 }
 
@@ -3876,6 +3916,9 @@ static void p2p_timeout_wait_peer_idle(struct p2p_data *p2p)
 
 	p2p_dbg(p2p, "Go to Listen state while waiting for the peer to become ready for GO Negotiation");
 	p2p_set_state(p2p, P2P_WAIT_PEER_CONNECT);
+	/* Sprd Bug#447946 20150618 Bgn */
+	p2p_set_timeout(p2p, 1, 0);
+	/* Sprd Bug#447946 20150618 End */
 	p2p_listen_in_find(p2p, 0);
 }
 

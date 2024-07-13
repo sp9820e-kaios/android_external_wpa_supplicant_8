@@ -249,6 +249,12 @@ static int eap_aka_umts_auth(struct eap_sm *sm, struct eap_aka_data *data)
 	if (conf == NULL)
 		return -1;
 
+#ifdef CONFIG_ATCI
+		return scard_umts_auth(eap_sm_get_sim_slot(sm), data->rand,
+					   data->autn, data->res, &data->res_len,
+					   data->ik, data->ck, data->auts);
+#endif
+
 	if (sm->external_sim) {
 		if (conf->external_sim_resp)
 			return eap_aka_ext_sim_result(sm, data, conf);

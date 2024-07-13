@@ -275,6 +275,7 @@ static int wpa_config_read_global(struct wpa_config *config, HKEY hk)
 	wpa_config_read_reg_dword(hk, TEXT("okc"), &config->okc);
 	wpa_config_read_reg_dword(hk, TEXT("pmf"), &val);
 	config->pmf = val;
+	wpa_config_read_reg_dword(hk, TEXT("rrm"), &config->rrm);
 
 	return errors ? -1 : 0;
 }
@@ -622,6 +623,7 @@ static int wpa_config_write_global(struct wpa_config *config, HKEY hk)
 
 	wpa_config_write_reg_dword(hk, TEXT("okc"), config->okc, 0);
 	wpa_config_write_reg_dword(hk, TEXT("pmf"), config->pmf, 0);
+	wpa_config_write_reg_dword(hk, TEXT("rrm"), config->rrm, 0);
 
 	wpa_config_write_reg_dword(hk, TEXT("external_sim"),
 				   config->external_sim, 0);

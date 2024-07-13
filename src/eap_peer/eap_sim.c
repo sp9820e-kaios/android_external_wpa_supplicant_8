@@ -242,6 +242,21 @@ static int eap_sim_gsm_auth(struct eap_sm *sm, struct eap_sim_data *data)
 	if (conf == NULL)
 		return -1;
 
+#ifdef CONFIG_ATCI
+		if (scard_gsm_auth(eap_sm_get_sim_slot(sm), data->rand[0],
+				   data->sres[0], data->kc[0]) ||
+			scard_gsm_auth(eap_sm_get_sim_slot(sm), data->rand[1],
+				   data->sres[1], data->kc[1]) ||
+			(data->num_chal > 2 &&
+			 scard_gsm_auth(eap_sm_get_sim_slot(sm), data->rand[2],
+					data->sres[2], data->kc[2]))) {
+			wpa_printf(MSG_DEBUG, "EAP-SIM: GSM SIM "
+				   "authentication could not be completed");
+			return -1;
+		}
+		return 0;
+#endif
+
 	if (sm->external_sim) {
 		if (conf->external_sim_resp)
 			return eap_sim_ext_sim_result(sm, data, conf);

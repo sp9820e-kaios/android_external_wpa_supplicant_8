@@ -134,7 +134,7 @@ static void p2p_client_info(struct wpabuf *ie, struct p2p_group_member *m)
 }
 
 
-static void p2p_group_add_common_ies(struct p2p_group *group,
+void p2p_group_add_common_ies(struct p2p_group *group,
 				     struct wpabuf *ie)
 {
 	u8 dev_capab = group->p2p->dev_capab, group_capab = 0;

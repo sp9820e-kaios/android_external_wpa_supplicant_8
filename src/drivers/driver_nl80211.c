@@ -38,6 +38,14 @@
 #include "rfkill.h"
 #include "driver_nl80211.h"
 
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+#include "../ap/hostapd.h"
+#include "../ap/sta_info.h"
+#ifdef ANDROID
+#include "android_drv.h"
+#endif
+#endif
+
 
 #ifndef CONFIG_LIBNL20
 /*
@@ -194,7 +202,6 @@ static int nl80211_leave_ibss(struct wpa_driver_nl80211_data *drv,
 
 static int i802_set_iface_flags(struct i802_bss *bss, int up);
 static int nl80211_set_param(void *priv, const char *param);
-
 
 /* Converts nl80211_chan_width to a common format */
 enum chan_width convert2width(int width)
@@ -1356,7 +1363,9 @@ static int wpa_driver_nl80211_set_country(void *priv, const char *alpha2_arg)
 	alpha2[2] = '\0';
 
 	if (!nl80211_cmd(drv, msg, 0, NL80211_CMD_REQ_SET_REG) ||
-	    nla_put_string(msg, NL80211_ATTR_REG_ALPHA2, alpha2)) {
+	    nla_put_string(msg, NL80211_ATTR_REG_ALPHA2, alpha2) ||
+	    nla_put_u32(msg, NL80211_ATTR_USER_REG_HINT_TYPE,
+	                     NL80211_USER_REG_HINT_CELL_BASE)) {
 		nlmsg_free(msg);
 		return -EINVAL;
 	}
@@ -1683,6 +1692,23 @@ static void * wpa_driver_nl80211_drv_init(void *ctx, const char *ifname,
 
 	if (linux_iface_up(drv->global->ioctl_sock, ifname) > 0)
 		drv->start_iface_up = 1;
+
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE  //Bug 458806 new feature: set max sta num to cp2
+	if(hostapd){
+		struct hostapd_data *hostapd_p = ctx;
+#ifndef CONFIG_BCMDHD
+		char buf[15];
+		*buf = hostapd_p->conf->max_num_sta;
+		if(hostapd_p->driver->driver_cmd(bss, "MAX_STA", buf, sizeof(buf)))
+			wpa_printf(MSG_ERROR, "set max_num_sta to driver fail");
+#else
+		if(wpa_driver_set_max_sta(bss, hostapd_p->conf->max_num_sta)) {
+			wpa_printf(MSG_ERROR, "set max_num_sta to driver fail");
+			goto failed;
+		}
+#endif
+	}
+#endif
 
 	if (wpa_driver_nl80211_finish_drv_init(drv, set_addr, 1, driver_params))
 		goto failed;
@@ -2401,8 +2427,9 @@ static u32 wpa_alg_to_cipher_suite(enum wpa_alg alg, size_t key_len)
 		return WLAN_CIPHER_SUITE_SMS4;
 	case WPA_ALG_KRK:
 		return WLAN_CIPHER_SUITE_KRK;
-	case WPA_ALG_NONE:
 	case WPA_ALG_PMK:
+		return WLAN_CIPHER_SUITE_PMK;
+	case WPA_ALG_NONE:
 		wpa_printf(MSG_ERROR, "nl80211: Unexpected encryption algorithm %d",
 			   alg);
 		return 0;
@@ -2433,6 +2460,10 @@ static u32 wpa_cipher_to_cipher_suite(unsigned int cipher)
 		return WLAN_CIPHER_SUITE_WEP40;
 	case WPA_CIPHER_GTK_NOT_USED:
 		return WLAN_CIPHER_SUITE_NO_GROUP_ADDR;
+#ifdef CONFIG_WAPI
+	case WPA_CIPHER_SMS4:
+		return WLAN_CIPHER_SUITE_SMS4;
+#endif
 	}
 
 	return 0;
@@ -3306,6 +3337,11 @@ static int nl80211_put_beacon_int(struct nl_msg *msg, int beacon_int)
 }
 
 
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+int hostapd_init_block_list(void *priv);
+#endif
+
+
 static int wpa_driver_nl80211_set_ap(void *priv,
 				     struct wpa_driver_ap_params *params)
 {
@@ -3534,6 +3570,11 @@ static int wpa_driver_nl80211_set_ap(void *priv,
 			bss->bandwidth = params->freq->bandwidth;
 		}
 	}
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+	if(!os_strcmp(bss->ifname, "wlan0")){
+		hostapd_init_block_list(bss);
+	}
+#endif
 	return ret;
 fail:
 	nlmsg_free(msg);
@@ -4558,6 +4599,10 @@ static int nl80211_connect_common(struct wpa_driver_nl80211_data *drv,
 			ver |= NL80211_WPA_VERSION_1;
 		if (params->wpa_proto & WPA_PROTO_RSN)
 			ver |= NL80211_WPA_VERSION_2;
+#ifdef CONFIG_WAPI
+		if (params->wpa_proto & WPA_PROTO_WAPI)
+			ver |= NL80211_WAPI_VERSION_1;
+#endif
 
 		wpa_printf(MSG_DEBUG, "  * WPA Versions 0x%x", ver);
 		if (nla_put_u32(msg, NL80211_ATTR_WPA_VERSIONS, ver))
@@ -4587,6 +4632,10 @@ static int nl80211_connect_common(struct wpa_driver_nl80211_data *drv,
 	}
 
 	if (params->key_mgmt_suite == WPA_KEY_MGMT_IEEE8021X ||
+#ifdef CONFIG_WAPI
+	    params->key_mgmt_suite == WPA_KEY_MGMT_WAPI_PSK ||
+	    params->key_mgmt_suite == WPA_KEY_MGMT_WAPI_CERT ||
+#endif
 	    params->key_mgmt_suite == WPA_KEY_MGMT_PSK ||
 	    params->key_mgmt_suite == WPA_KEY_MGMT_FT_IEEE8021X ||
 	    params->key_mgmt_suite == WPA_KEY_MGMT_FT_PSK ||
@@ -4623,6 +4672,16 @@ static int nl80211_connect_common(struct wpa_driver_nl80211_data *drv,
 		case WPA_KEY_MGMT_IEEE8021X_SUITE_B:
 			mgmt = WLAN_AKM_SUITE_8021X_SUITE_B;
 			break;
+#ifdef CONFIG_WAPI
+		case WPA_KEY_MGMT_WAPI_PSK:
+			wpa_printf(MSG_DEBUG, "WAPI: Set NL80211_ATTR_AKM_SUITES to WLAN_AKM_SUITE_WAPI_PSK");
+			mgmt = WLAN_AKM_SUITE_WAPI_PSK;
+			break;
+		case WPA_KEY_MGMT_WAPI_CERT:
+			wpa_printf(MSG_DEBUG, "WAPI: Set NL80211_ATTR_AKM_SUITES to WLAN_AKM_SUITE_WAPI_CERT");
+			mgmt = WLAN_AKM_SUITE_WAPI_CERT;
+			break;
+#endif
 		case WPA_KEY_MGMT_IEEE8021X_SUITE_B_192:
 			mgmt = WLAN_AKM_SUITE_8021X_SUITE_B_192;
 			break;
@@ -8422,6 +8481,359 @@ static int wpa_driver_do_acs(void *priv, struct drv_acs_params *params)
 	return ret;
 }
 
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+
+#define HOSTAP_BLOCK_LIST_FILE "/data/misc/wifi/hostapd.blocklist"
+#define HOSTAP_MAX_BLOCK_NUM 8
+
+int hostapd_add_station_to_mac_addr_list(const u8 *mac_addr);
+int hostapd_del_station_from_mac_addr_list(const u8 *mac_addr);
+int hostapd_read_mac_addr_list(const char *file_path, u8 mac_addr_list[][ETH_ALEN]);
+int hostapd_write_mac_addr_list(const char *file_path, u8 mac_addr_list[][ETH_ALEN], int mac_addr_list_len);
+
+int hostapd_driver_nl80211_ap_priv_cmd(void *priv, char *cmd, char *buf, size_t buf_len )
+{
+	int ret = 0;
+	struct i802_bss *bss = priv;
+	struct hostapd_data *hostapd = bss->ctx;
+	struct mac_acl_entry *acl, *newacl;
+	int i, add;
+#ifdef CONFIG_BCMDHD
+	int acl_mode = hostapd->conf->macaddr_acl;
+	u8 mac_list[HOSTAP_MAX_BLOCK_NUM][ETH_ALEN];
+	u8 mac_num;
+#endif
+
+	if (os_strncasecmp(cmd, "BLOCK ", 6) == 0) {
+		u8 mac_addr[ETH_ALEN];
+		if(sscanf(cmd+6, MACSTR, &mac_addr[0], &mac_addr[1], &mac_addr[2], &mac_addr[3], &mac_addr[4], &mac_addr[5]) != 6)
+			return -1;
+#ifndef CONFIG_BCMDHD
+		if(android_driver_priv_cmd(priv, cmd) < 0)
+			return -1;
+#endif
+		if(hostapd_add_station_to_mac_addr_list(mac_addr) < 0)
+			return -1;
+#ifdef CONFIG_BCMDHD
+		if(acl_mode == ACCEPT_UNLESS_DENIED) {
+			mac_num = hostapd_read_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_list);
+			wpa_driver_set_ap_mac_list(hostapd->drv_priv, mac_list, mac_num, acl_mode);
+		}
+#endif
+		ret = os_snprintf(buf, buf_len, "OK");
+	} else if (os_strncasecmp(cmd, "UNBLOCK ", 8) == 0) {
+		u8 mac_addr[ETH_ALEN];
+		if(sscanf(cmd+8, MACSTR, &mac_addr[0], &mac_addr[1], &mac_addr[2], &mac_addr[3], &mac_addr[4], &mac_addr[5]) != 6)
+			return -1;
+#ifndef CONFIG_BCMDHD
+		if(android_driver_priv_cmd(priv, cmd) < 0)
+			return -1;
+#endif
+		if(hostapd_del_station_from_mac_addr_list(mac_addr) < 0)
+			return -1;
+#ifdef CONFIG_BCMDHD
+		if(acl_mode == ACCEPT_UNLESS_DENIED) {
+			mac_num = hostapd_read_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_list);
+			wpa_driver_set_ap_mac_list(hostapd->drv_priv, mac_list, mac_num, acl_mode);
+		}
+#endif
+		ret = os_snprintf(buf, buf_len, "OK");
+	} else if (os_strncasecmp(cmd, "BLOCK_LIST", 10) == 0) {
+		u8 mac_addr_list[HOSTAP_MAX_BLOCK_NUM][ETH_ALEN];
+		int mac_addr_list_len;
+		mac_addr_list_len = hostapd_read_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_addr_list);
+		for(i=0; i<mac_addr_list_len; i++) {
+			ret = os_snprintf(buf + i * 18, buf_len - i * 18, MACSTR " ", MAC2STR(mac_addr_list[i]));
+		}
+		ret = mac_addr_list_len * 18;
+	}else if(os_strncasecmp(cmd, "WHITE_ADD_ONCE", 14) == 0){
+#ifndef CONFIG_BCMDHD
+		char cmd_buf[MAX_DRV_CMD_SIZE];
+		wpa_printf(MSG_INFO, "%s", cmd);
+		os_memset(cmd_buf, 0, sizeof(cmd_buf));
+		os_strncpy(cmd_buf, cmd, 9);
+		cmd_buf[9] = ' ';
+		os_snprintf(cmd_buf+10, 18, MACSTR, MAC2STR(&cmd[15]));
+		wpa_printf(MSG_INFO, "%s", cmd_buf);
+		if(android_driver_priv_cmd(priv, cmd_buf) < 0)
+			return -1;
+#endif
+		ret = os_snprintf(buf, buf_len, "OK");
+	}else if(os_strncasecmp(cmd, "WHITE_EN_ONCE", 13) == 0){
+		wpa_printf(MSG_INFO, "%s", cmd);
+#ifndef CONFIG_BCMDHD
+		if(android_driver_priv_cmd(priv, "WHITE_EN \0") < 0)
+			return -1;
+#else
+		// switch to white list mode
+		acl_mode = DENY_UNLESS_ACCEPTED;
+		hostapd->conf->macaddr_acl = acl_mode;
+
+		acl = hostapd->conf->accept_mac;
+		mac_num = hostapd->conf->num_accept_mac;
+		for (i = 0; i < mac_num; i++)
+			os_memcpy(mac_list[i], acl[i].addr, ETH_ALEN);
+		wpa_driver_set_ap_mac_list(hostapd->drv_priv, mac_list, mac_num, acl_mode);
+#endif
+		ret = os_snprintf(buf, buf_len, "OK");
+	}else if(os_strncasecmp(cmd, "WHITE_ADD", 9) == 0){
+		wpa_printf(MSG_INFO, "%s", cmd);
+		char addr[ETH_ALEN];
+		hwaddr_aton(cmd+10, addr);
+		add = 1;
+		i = 0;
+		acl = hostapd->conf->accept_mac;
+		while(i < hostapd->conf->num_accept_mac){
+			if(os_memcmp(acl[i].addr, addr, ETH_ALEN) == 0){
+				add = 0;
+				wpa_printf(MSG_INFO, "This mac has been added.");
+				break;
+			}
+			i++;
+		}
+
+		if(add){
+#ifndef CONFIG_BCMDHD
+			if(android_driver_priv_cmd(priv, cmd) < 0)
+				return -1;
+#endif
+			newacl = os_realloc_array(acl, hostapd->conf->num_accept_mac+ 1, sizeof(*acl));
+			if (newacl == NULL) {
+				wpa_printf(MSG_ERROR, "MAC list reallocation failed");
+				return -1;
+			}
+
+			hostapd->conf->accept_mac = newacl;
+			os_memcpy(newacl[hostapd->conf->num_accept_mac].addr, addr, ETH_ALEN);
+			hostapd->conf->num_accept_mac++;
+#ifdef CONFIG_BCMDHD
+			if(acl_mode == DENY_UNLESS_ACCEPTED) {
+				mac_num = hostapd->conf->num_accept_mac;
+				for (i = 0; i < mac_num; i++)
+					os_memcpy(mac_list[i], acl[i].addr, ETH_ALEN);
+
+				wpa_driver_set_ap_mac_list(hostapd->drv_priv, mac_list, mac_num, acl_mode);
+			}
+#endif
+		}
+		ret = os_snprintf(buf, buf_len, "OK");
+	}else if(os_strncasecmp(cmd, "WHITE_DEL", 9) == 0){
+		wpa_printf(MSG_INFO, "%s", cmd);
+		char addr[ETH_ALEN];
+		hwaddr_aton(cmd+10, addr);
+		i = 0;
+		acl = hostapd->conf->accept_mac;
+#ifndef CONFIG_BCMDHD
+		if(android_driver_priv_cmd(priv, cmd) < 0)
+			return -1;
+#endif
+
+		while(i < hostapd->conf->num_accept_mac){
+			if(os_memcmp(acl[i].addr, addr, ETH_ALEN) == 0){
+				os_remove_in_array(acl, hostapd->conf->num_accept_mac, sizeof(*acl), i);
+				hostapd->conf->num_accept_mac--;
+#ifdef CONFIG_BCMDHD
+				mac_num = hostapd->conf->num_accept_mac;
+				if(acl_mode == DENY_UNLESS_ACCEPTED) {
+					for (i = 0; i < mac_num; i++)
+						os_memcpy(mac_list[i], acl[i].addr, ETH_ALEN);
+
+					wpa_driver_set_ap_mac_list(hostapd->drv_priv, mac_list, mac_num, acl_mode);
+				}
+#endif
+				break;
+			}
+			i++;
+		}
+		ret = os_snprintf(buf, buf_len, "OK");
+	}else if(os_strncasecmp(cmd, "WHITE_EN", 8) == 0){
+#ifndef CONFIG_BCMDHD
+		struct sta_info *sta;
+		char cmd_buf[MAX_DRV_CMD_SIZE];
+		int sum = 0;
+		os_memset(cmd_buf, 0, sizeof(cmd_buf));
+		os_strncpy(cmd_buf, cmd, 8);
+		cmd_buf[8] = ' ';
+		acl = hostapd->conf->accept_mac;
+		for (sta = hostapd->sta_list; sta; sta = sta->next) {
+			i = 0; add = 1;
+			while(i < hostapd->conf->num_accept_mac){
+				wpa_printf(MSG_INFO, "WHITE_EN accept " MACSTR, MAC2STR(acl[i].addr));
+				if(os_memcmp(acl[i].addr, sta->addr, ETH_ALEN) == 0){
+					add = 0;
+					break;
+				}
+				i++;
+			}
+			if(add){
+				wpa_printf(MSG_INFO, "WHITE_EN add " MACSTR, MAC2STR(sta->addr));
+				os_snprintf(&cmd_buf[10+sum*18], 18, MACSTR, MAC2STR(sta->addr));
+				cmd_buf[10+sum*18+17] = ' ';
+				sum++;
+			}
+		}
+		cmd_buf[9] = sum;
+		wpa_printf(MSG_INFO, "WHITE_EN %d.", cmd_buf[9]);
+		wpa_printf(MSG_INFO, "%s", cmd_buf);
+		if(android_driver_priv_cmd(priv, cmd_buf) < 0)
+			return -1;
+#else
+		wpa_printf(MSG_INFO, "%s", cmd);
+
+		// switch to white list mode
+		acl_mode = DENY_UNLESS_ACCEPTED;
+		hostapd->conf->macaddr_acl = acl_mode;
+
+		acl = hostapd->conf->accept_mac;
+		mac_num = hostapd->conf->num_accept_mac;
+		for (i = 0; i < mac_num; i++)
+			os_memcpy(mac_list[i], acl[i].addr, ETH_ALEN);
+		wpa_driver_set_ap_mac_list(hostapd->drv_priv, mac_list, mac_num, acl_mode);
+#endif
+
+		ret = os_snprintf(buf, buf_len, "OK");
+	}else if(os_strncasecmp(cmd, "WHITE_DIS", 9) == 0){
+#ifndef CONFIG_BCMDHD
+		u8 mac_addr_list[HOSTAP_MAX_BLOCK_NUM][ETH_ALEN];
+		int mac_addr_list_len;
+		struct sta_info *sta;
+		char cmd_buf[MAX_DRV_CMD_SIZE];
+		int sum = 0;
+		os_memset(cmd_buf, 0, sizeof(cmd_buf));
+		os_strncpy(cmd_buf, cmd, 9);
+		cmd_buf[9] = ' ';
+		mac_addr_list_len = hostapd_read_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_addr_list);
+		acl = hostapd->conf->accept_mac;
+		for (sta = hostapd->sta_list; sta; sta = sta->next) {
+			i = 0; add = 0;
+			while(i < mac_addr_list_len){
+				if(os_memcmp(mac_addr_list[i], sta->addr, ETH_ALEN) == 0){
+					add = 1;
+					break;
+				}
+				i++;
+			}
+			if(add){
+				wpa_printf(MSG_INFO, "WHITE_DIS add " MACSTR, MAC2STR(sta->addr));
+				os_snprintf(&cmd_buf[11+sum*18], 18, MACSTR, MAC2STR(sta->addr));
+				cmd_buf[11+sum*18+17] = ' ';
+				sum++;
+			}
+		}
+		cmd_buf[10] = sum;
+		wpa_printf(MSG_INFO, "WHITE_DIS %d.", cmd_buf[10]);
+		wpa_printf(MSG_INFO, "%s", cmd_buf);
+		if(android_driver_priv_cmd(priv, cmd_buf) < 0)
+			return -1;
+#else
+		wpa_printf(MSG_INFO, "%s", cmd);
+
+		// switch to black list mode
+		acl_mode = ACCEPT_UNLESS_DENIED;
+		hostapd->conf->macaddr_acl = acl_mode;
+		mac_num = hostapd_read_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_list);
+		wpa_driver_set_ap_mac_list(hostapd->drv_priv, mac_list, mac_num, acl_mode);
+#endif
+		ret = os_snprintf(buf, buf_len, "OK");
+	}else {
+		ret = os_snprintf(buf, buf_len, "Unknown driver command: %s", cmd);
+	}
+	return ret;
+}
+
+int hostapd_init_block_list(void *priv)
+{
+	u8 mac_addr_list[HOSTAP_MAX_BLOCK_NUM][ETH_ALEN];
+	int mac_addr_list_len;
+	char cmd[MAX_DRV_CMD_SIZE];
+	int i;
+#ifdef CONFIG_BCMDHD
+	struct i802_bss *bss = priv;
+	struct hostapd_data *hostapd = bss->ctx;
+	int acl_mode = hostapd->conf->macaddr_acl;
+#endif
+
+	mac_addr_list_len = hostapd_read_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_addr_list);
+#ifndef CONFIG_BCMDHD
+	for(i=0; i<mac_addr_list_len; i++) {
+		sprintf(cmd,"BLOCK %02x:%02x:%02x:%02x:%02x:%02x", mac_addr_list[i][0], mac_addr_list[i][1], mac_addr_list[i][2], mac_addr_list[i][3], mac_addr_list[i][4], mac_addr_list[i][5]);
+		if(android_driver_priv_cmd(priv, cmd) < 0)
+			return -1;
+	}
+#else
+	if(acl_mode == ACCEPT_UNLESS_DENIED) {
+		wpa_driver_set_ap_mac_list(hostapd->drv_priv, mac_addr_list, mac_addr_list_len, acl_mode);
+	}
+#endif
+	return 0;
+}
+
+
+int hostapd_add_station_to_mac_addr_list(const u8 *mac_addr)
+{
+	u8 mac_addr_list[HOSTAP_MAX_BLOCK_NUM][ETH_ALEN];
+	int mac_addr_list_len;
+	int i;
+	mac_addr_list_len = hostapd_read_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_addr_list);
+	for(i=0; i<mac_addr_list_len; i++) {
+		if(os_memcmp(mac_addr_list[i], mac_addr, ETH_ALEN) == 0) {
+			return 0;
+		}
+	}
+	if(mac_addr_list_len == HOSTAP_MAX_BLOCK_NUM) return -1;
+	os_memcpy(mac_addr_list[mac_addr_list_len], mac_addr, ETH_ALEN);
+	mac_addr_list_len++;
+	return hostapd_write_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_addr_list, mac_addr_list_len);
+}
+
+int hostapd_del_station_from_mac_addr_list(const u8 *mac_addr)
+{
+	u8 mac_addr_list[HOSTAP_MAX_BLOCK_NUM][ETH_ALEN];
+	int mac_addr_list_len;
+	int i;
+	mac_addr_list_len = hostapd_read_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_addr_list);
+	for(i=0; i<mac_addr_list_len; i++) {
+		if(os_memcmp(mac_addr_list[i], mac_addr, ETH_ALEN) == 0) {
+			break;
+		}
+	}
+	if(i == mac_addr_list_len) {
+		return 0;
+	} else {
+		for( ; i<mac_addr_list_len-1; i++) {
+			os_memcpy(mac_addr_list[i], mac_addr_list[i+1], ETH_ALEN);
+		}
+		mac_addr_list_len--;
+	}
+	return hostapd_write_mac_addr_list(HOSTAP_BLOCK_LIST_FILE, mac_addr_list, mac_addr_list_len);
+}
+
+int hostapd_read_mac_addr_list(const char *file_path, u8 mac_addr_list[][ETH_ALEN])
+{
+	FILE *f;
+	int mac_addr_list_len = 0;
+	f = fopen(file_path, "r");
+	if (f == NULL) return 0;
+	mac_addr_list_len = fread(mac_addr_list, ETH_ALEN, HOSTAP_MAX_BLOCK_NUM, f);
+	fclose(f);
+	return mac_addr_list_len;
+}
+
+int hostapd_write_mac_addr_list(const char *file_path, u8 mac_addr_list[][ETH_ALEN], int mac_addr_list_len)
+{
+	FILE *f;
+	int ret = 0;
+	f = fopen(file_path, "w");
+	if (f == NULL) return -1;
+	if(fwrite(mac_addr_list, ETH_ALEN, mac_addr_list_len, f) != mac_addr_list_len) {
+		wpa_printf(MSG_ERROR, "Failed to write mac address list");
+		ret = -1;
+	}
+	fclose(f);
+	return ret;
+}
+
+#endif
 
 const struct wpa_driver_ops wpa_driver_nl80211_ops = {
 	.name = "nl80211",
@@ -8468,6 +8880,9 @@ const struct wpa_driver_ops wpa_driver_nl80211_ops = {
 	.set_sta_vlan = driver_nl80211_set_sta_vlan,
 	.sta_deauth = i802_sta_deauth,
 	.sta_disassoc = i802_sta_disassoc,
+#ifndef CONFIG_NO_HOSTAPD_ADVANCE
+	.ap_priv_cmd = hostapd_driver_nl80211_ap_priv_cmd,
+#endif
 	.read_sta_data = driver_nl80211_read_sta_data,
 	.set_freq = i802_set_freq,
 	.send_action = driver_nl80211_send_action,
@@ -8530,4 +8945,7 @@ const struct wpa_driver_ops wpa_driver_nl80211_ops = {
 	.add_tx_ts = nl80211_add_ts,
 	.del_tx_ts = nl80211_del_ts,
 	.do_acs = wpa_driver_do_acs,
+#ifndef CONFIG_BCMDHD
+	.wnm_oper = wpa_driver_nl80211_driver_cmd_wnm,
+#endif
 };

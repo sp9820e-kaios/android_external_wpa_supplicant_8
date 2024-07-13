@@ -45,7 +45,9 @@
 #include "mesh.h"
 #include "mesh_mpm.h"
 #include "wmm_ac.h"
+#include "wpa_i.h"
 
+#define BLACKLIST_LIMITATION 2
 
 #ifndef CONFIG_NO_SCAN_PROCESSING
 static int wpas_select_network_from_last_scan(struct wpa_supplicant *wpa_s,
@@ -305,6 +307,7 @@ void wpa_supplicant_mark_disassoc(struct wpa_supplicant *wpa_s)
 	wpa_s->key_mgmt = 0;
 
 	wpas_rrm_reset(wpa_s);
+	wpa_s->wnmsleep_used = 0;
 }
 
 
@@ -313,6 +316,25 @@ static void wpa_find_assoc_pmkid(struct wpa_supplicant *wpa_s)
 	struct wpa_ie_data ie;
 	int pmksa_set = -1;
 	size_t i;
+	u8 bssid[ETH_ALEN];
+	struct wpa_ssid *ssid = wpa_s->current_ssid;
+
+	if((wpa_s->wpa_state == WPA_COMPLETED) && ssid->proactive_key_caching&&
+		wpa_key_mgmt_wpa(ssid->key_mgmt)){
+		if (wpa_drv_get_bssid(wpa_s, bssid) < 0) {
+			wpa_dbg(wpa_s, MSG_ERROR, "Failed to get BSSID");
+			wpa_supplicant_deauthenticate(
+				wpa_s, WLAN_REASON_DEAUTH_LEAVING);
+			return;
+		}
+		int try_opportunistic = 1;
+		if (pmksa_cache_set_current(wpa_s->wpa, NULL, bssid,
+					    ssid, try_opportunistic) == 0){
+			eapol_sm_notify_pmkid_attempt(wpa_s->eapol);
+			wpa_dbg(wpa_s, MSG_DEBUG, "RSN: OKC PMKSA set and try offload OKC roaming");
+			return;
+		}
+	}
 
 	if (wpa_sm_parse_own_wpa_ie(wpa_s->wpa, &ie) < 0 ||
 	    ie.pmkid == NULL)
@@ -841,7 +863,7 @@ static struct wpa_ssid * wpa_scan_res_match(struct wpa_supplicant *wpa_s,
 
 	e = wpa_blacklist_get(wpa_s, bss->bssid);
 	if (e) {
-		int limit = 1;
+		int limit = BLACKLIST_LIMITATION;
 		if (wpa_supplicant_enabled_networks(wpa_s) == 1) {
 			/*
 			 * When only a single network is enabled, we can
@@ -851,7 +873,7 @@ static struct wpa_ssid * wpa_scan_res_match(struct wpa_supplicant *wpa_s,
 			 * single error if there are no other BSSes of the
 			 * current ESS.
 			 */
-			limit = 0;
+			//limit = 0;
 		}
 		if (e->count > limit) {
 			wpa_dbg(wpa_s, MSG_DEBUG, "   skip - blacklisted "
@@ -894,7 +916,7 @@ static struct wpa_ssid * wpa_scan_res_match(struct wpa_supplicant *wpa_s,
 		}
 
 #ifdef CONFIG_WPS
-		if ((ssid->key_mgmt & WPA_KEY_MGMT_WPS) && e && e->count > 0) {
+		if ((ssid->key_mgmt & WPA_KEY_MGMT_WPS) && e && e->count > BLACKLIST_LIMITATION) {
 			wpa_dbg(wpa_s, MSG_DEBUG, "   skip - blacklisted "
 				"(WPS)");
 			continue;
@@ -949,6 +971,22 @@ static struct wpa_ssid * wpa_scan_res_match(struct wpa_supplicant *wpa_s,
 				"   skip - BSSID not in whitelist");
 			continue;
 		}
+#ifdef CONFIG_WAPI
+		const u8 *wapi_ie;
+		u8 wapi_ie_len;
+		wapi_ie = wpa_bss_get_ie(bss, WLAN_EID_WAPI);
+		if ((ssid->proto & WPA_PROTO_WAPI) && wapi_ie) {
+			if(os_strcmp(wpa_s->ifname,"wlan0")) return NULL;
+			if ( (ssid->key_mgmt & WPA_KEY_MGMT_WAPI_PSK) && (wapi_ie[9] == 2) ) {
+				wpa_printf(MSG_DEBUG, "WAPI: PSK network is selected based on WAPI IE");
+				return ssid;
+			}
+			if ( (ssid->key_mgmt & WPA_KEY_MGMT_WAPI_CERT) && (wapi_ie[9] == 1) ) {
+				wpa_printf(MSG_DEBUG, "WAPI: CERT network is selected based on WAPI IE");
+				return ssid;
+			}
+		}
+#endif
 
 		if (!wpa_supplicant_ssid_bss_match(wpa_s, ssid, bss))
 			continue;
@@ -2043,6 +2081,8 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 {
 	u8 bssid[ETH_ALEN];
 	int ft_completed;
+	int new_bss = 0;
+	const u8 *ptk;
 
 #ifdef CONFIG_AP
 	if (wpa_s->ap_iface) {
@@ -2056,6 +2096,51 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 		return;
 	}
 #endif /* CONFIG_AP */
+#ifdef CONFIG_WAPI
+	if (wpa_s->current_ssid && (wpa_s->current_ssid->proto & WPA_PROTO_WAPI)) {
+		u8 *ap_wapi_ie;
+		u8 ap_wapi_ie_len;
+		MAC_ADDRESS bssid_s;
+		MAC_ADDRESS own_s;
+
+		wpa_printf(MSG_DEBUG,"WAPI: %s: associated to a wapi network.\n", __FUNCTION__);
+		if (wpa_drv_get_bssid(wpa_s, bssid) >= 0 &&
+			os_memcmp(bssid, wpa_s->bssid, ETH_ALEN) != 0) {
+			wpa_msg(wpa_s, MSG_DEBUG, "Associated to a new BSS: BSSID="
+				MACSTR, MAC2STR(bssid));
+			os_memcpy(wpa_s->bssid, bssid, ETH_ALEN);
+			os_memset(wpa_s->pending_bssid, 0, ETH_ALEN);
+		}
+
+		os_memset(&bssid_s, 0, sizeof(bssid_s));
+		os_memset(&own_s, 0, sizeof(own_s));
+		os_memcpy(bssid_s.v, bssid, sizeof(bssid_s.v));
+		os_memcpy(own_s.v, wpa_s->own_addr, sizeof(own_s.v));
+		wpa_hexdump(MSG_DEBUG,"WAPI: bssid",bssid, sizeof(bssid));
+		wpa_hexdump(MSG_DEBUG,"WAPI: own mac",wpa_s->own_addr, 6);
+
+		if(wpa_s->current_bss == NULL) return;
+		ap_wapi_ie = wpa_bss_get_ie(wpa_s->current_bss, WLAN_EID_WAPI);
+		ap_wapi_ie_len = ap_wapi_ie ? 2 + ap_wapi_ie[1] : 0;
+		if(ap_wapi_ie_len)
+		{
+			wpa_printf(MSG_DEBUG,"WAPI: ap_wapi_ie_len is %d \n", ap_wapi_ie_len);
+			WAI_Msg_Input(CONN_ASSOC, &bssid_s, &own_s, ap_wapi_ie, ap_wapi_ie_len);
+		}
+		else
+		{
+			wpa_printf(MSG_DEBUG,"WAPI: ap_wapi_ie_len is Zero \n");
+			WAI_Msg_Input(CONN_ASSOC, &bssid_s, &own_s, NULL, 0);
+		}
+
+		wpa_supplicant_cancel_auth_timeout(wpa_s);
+		wpa_supplicant_set_state(wpa_s, WPA_ASSOCIATED);
+		wpa_msg(wpa_s, MSG_INFO, "Associated with " MACSTR, MAC2STR(bssid));
+		wpa_s->assoc_freq = data->assoc_info.freq;
+		wpa_printf(MSG_DEBUG,"wpa_s->assoc_freq = %u \n", wpa_s->assoc_freq);
+		return;
+	}
+#endif
 
 	eloop_cancel_timeout(wpas_network_reenabled, wpa_s, NULL);
 
@@ -2068,6 +2153,40 @@ static void wpa_supplicant_event_assoc(struct wpa_supplicant *wpa_s,
 		wpa_supplicant_deauthenticate(
 			wpa_s, WLAN_REASON_DEAUTH_LEAVING);
 		return;
+	}
+
+	if (wpa_s->wpa_state == WPA_COMPLETED && wpa_key_mgmt_ft(wpa_s->key_mgmt) ) {
+		if (os_memcmp(bssid, wpa_s->bssid, ETH_ALEN) != 0 &&
+		    !is_zero_ether_addr(bssid)) {
+			wpa_dbg(wpa_s, MSG_DEBUG, "FT: Assume FT reassoc completed by driver.");
+
+			wpa_supplicant_set_state(wpa_s, WPA_ASSOCIATED);
+			wpa_dbg(wpa_s, MSG_DEBUG, "Associated to a new BSS: BSSID="
+				MACSTR, MAC2STR(bssid));
+			random_add_randomness(bssid, ETH_ALEN);
+			os_memcpy(wpa_s->bssid, bssid, ETH_ALEN);
+			os_memset(wpa_s->pending_bssid, 0, ETH_ALEN);
+			wpa_supplicant_set_state(wpa_s, WPA_COMPLETED);
+			wpa_hexdump(MSG_DEBUG, "tail of resp ie: ",
+				data->assoc_info.resp_ies + data->assoc_info.resp_ies_len - 54, 32);
+			/* update PTK after 11r roaming finished */
+			ptk = wpa_ft_get_vendor_ie(data->assoc_info.resp_ies,
+						data->assoc_info.resp_ies_len, 0x4045da01);
+			if (ptk) {
+				/* skip vendor IE 6 = dd + len + 4OUI header */
+				ptk += 6;
+				wpa_printf(MSG_DEBUG, "11r roaming, update kck, kek, tk");
+				wpa_hexdump(MSG_DEBUG, "PTK: ", ptk, 32);
+				os_memcpy(wpa_s->wpa->ptk.kck, ptk, 16);
+				os_memcpy(wpa_s->wpa->ptk.kek, ptk + 16, 16);
+				os_memcpy(wpa_s->wpa->ptk.tk, ptk + 16 + 16, 16);
+				wpa_s->wpa->rx_replay_counter_set = 0;
+				wpa_hexdump(MSG_DEBUG, "FT: KCK", wpa_s->wpa->ptk.kck, 16);
+				wpa_hexdump(MSG_DEBUG, "FT: KEK", wpa_s->wpa->ptk.kek, 16);
+				wpa_hexdump(MSG_DEBUG, "FT: TK", wpa_s->wpa->ptk.tk, 16);
+			}
+			return;
+		}
 	}
 
 	wpa_supplicant_set_state(wpa_s, WPA_ASSOCIATED);
@@ -2319,6 +2438,33 @@ static void wpa_supplicant_event_disassoc_finish(struct wpa_supplicant *wpa_s,
 
 	authenticating = wpa_s->wpa_state == WPA_AUTHENTICATING;
 	os_memcpy(prev_pending_bssid, wpa_s->pending_bssid, ETH_ALEN);
+
+#ifdef CONFIG_WAPI
+	if (wpa_s->current_ssid && (wpa_s->current_ssid->proto == WPA_PROTO_WAPI)) { /* this is a WAPI network */
+		MAC_ADDRESS bssid_s;
+		MAC_ADDRESS own_s;
+
+		os_memset(&bssid_s, 0, sizeof(bssid_s));
+		os_memset(&own_s, 0, sizeof(own_s));
+		os_memcpy(bssid_s.v, wpa_s->bssid, sizeof(bssid_s.v));
+		os_memcpy(own_s.v, wpa_s->own_addr, sizeof(own_s.v));
+
+		WAI_Msg_Input(CONN_DISASSOC, &bssid_s, &own_s, NULL, 0);
+
+		if (wpa_s->wpa_state >= WPA_ASSOCIATED)
+			wpa_supplicant_req_scan(wpa_s, 0, 100000);
+		bssid = wpa_s->bssid;
+		if (os_memcmp(bssid, "\x00\x00\x00\x00\x00\x00", ETH_ALEN) == 0)
+			bssid = wpa_s->pending_bssid;
+		wpa_blacklist_add(wpa_s, bssid);
+		wpa_msg(wpa_s, MSG_INFO, WPA_EVENT_DISCONNECTED "- Disconnect event - "
+			"remove keys");
+		wpa_supplicant_mark_disassoc(wpa_s);
+		wpas_connect_work_done(wpa_s);
+
+		return;
+	}
+#endif
 
 	if (wpa_s->key_mgmt == WPA_KEY_MGMT_WPA_NONE) {
 		/*
@@ -2597,6 +2743,11 @@ wpa_supplicant_event_interface_status(struct wpa_supplicant *wpa_s,
 			wpa_s->global->p2p_init_wpa_s = NULL;
 		}
 #endif /* CONFIG_P2P */
+
+#ifdef CONFIG_WAPI
+		l2_packet_deinit(wpa_s->l2_wapi);
+		wpa_s->l2_wapi = NULL;
+#endif
 
 #ifdef CONFIG_TERMINATE_ONLASTIF
 		/* check if last interface */

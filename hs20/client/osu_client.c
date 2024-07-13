@@ -1443,9 +1443,44 @@ static void set_pps_cred_able_to_share(struct hs20_osu_client *ctx, int id,
 
 
 static void set_pps_cred_eap_method(struct hs20_osu_client *ctx, int id,
-				    xml_node_t *node)
+				    xml_node_t *eap)
 {
 	wpa_printf(MSG_INFO, "- Credential/UsernamePassword/EAPMethod - TODO");
+#if 0
+	xml_node_t *node;
+	char *eaptype, *str, buf[20];
+	int type;
+	int mnc_len = 3;
+	size_t imsi_len;
+
+	node = get_node(ctx->xml, eap, "EAPType");
+	if (node == NULL) {
+		wpa_printf(MSG_INFO, "No EAPMethod/EAPType node in credential");
+		return;
+	}
+	eaptype = xml_node_get_text(ctx->xml, node);
+	if (eaptype == NULL) {
+		wpa_printf(MSG_INFO, "Could not extract SIM/EAPType");
+		return;
+	}
+	wpa_printf(MSG_INFO, " - Credential/EAPMethod/EAPType = %s", eaptype);
+	type = atoi(eaptype);
+	xml_node_get_text_free(ctx->xml, eaptype);
+
+	switch (type) {
+	case EAP_TYPE_TTLS:
+		if (set_cred(ctx->ifname, id, "eap", "TTLS") < 0)
+			wpa_printf(MSG_INFO, "Could not set eap=TTLS");
+		break;
+	case EAP_TYPE_TLS:
+		if (set_cred(ctx->ifname, id, "eap", "TLS") < 0)
+			wpa_printf(MSG_INFO, "Could not set eap=TLS");
+		break;
+	default:
+		wpa_printf(MSG_INFO, "Unsupported EAPMethod/EAPType %d", type);
+		return;
+	}
+#endif
 }
 
 
@@ -2181,6 +2216,7 @@ static int cmd_osu_select(struct hs20_osu_client *ctx, const char *dir,
 		goto selected;
 	}
 
+	snprintf(dir, 100, "%s", "/mnt/sdcard");
 	snprintf(fname, sizeof(fname), "%s/osu-providers.html", dir);
 	f = fopen(fname, "w");
 	if (f == NULL) {
@@ -2229,7 +2265,7 @@ static int cmd_osu_select(struct hs20_osu_client *ctx, const char *dir,
 		fprintf(f, "</table></a><br><small>BSSID: %s<br>\n"
 			"SSID: %s<br>\n",
 			last->bssid, last->osu_ssid);
-		if (last->osu_nai)
+		if (last->osu_nai[0])
 			fprintf(f, "NAI: %s<br>\n", last->osu_nai);
 		fprintf(f, "URL: %s<br>\n"
 			"methods:%s%s<br>\n"
@@ -2934,7 +2970,7 @@ static int init_ctx(struct hs20_osu_client *ctx)
 		xml_node_deinit_ctx(ctx->xml);
 		return -1;
 	}
-	http_ocsp_set(ctx->http, 2);
+	http_ocsp_set(ctx->http, 2); //MANDATORY_OCSP
 	http_set_cert_cb(ctx->http, osu_cert_cb, ctx);
 
 	return 0;

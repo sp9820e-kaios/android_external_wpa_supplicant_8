@@ -14,8 +14,11 @@
 #include "wpa_ctrl.h"
 #include "wpa_helpers.h"
 
-
+#ifdef ANDROID
+char *wpas_ctrl_path = "@android:wpa_";
+#else
 char *wpas_ctrl_path = "/var/run/wpa_supplicant/";
+#endif
 static int default_timeout = 60;
 
 
@@ -38,12 +41,22 @@ int wpa_command(const char *ifname, const char *cmd)
 	char buf[128];
 	size_t len;
 
-	printf("wpa_command(ifname='%s', cmd='%s')\n", ifname, cmd);
+	char cmd_buf[128];
+
+	os_memset(cmd_buf, 0, sizeof(cmd_buf));
+
+#ifdef ANDROID
+	os_snprintf(cmd_buf, sizeof(cmd_buf), "IFNAME=%s %s", ifname, cmd);
+#else
+	os_snprintf(cmd_buf, sizeof(cmd_buf), "%s", cmd);
+#endif
+
+	printf("wpa_command(ifname='%s', cmd='%s')\n", ifname, cmd_buf);
 	ctrl = wpa_open_ctrl(ifname);
 	if (ctrl == NULL)
 		return -1;
 	len = sizeof(buf);
-	if (wpa_ctrl_request(ctrl, cmd, strlen(cmd), buf, &len, NULL) < 0) {
+	if (wpa_ctrl_request(ctrl, cmd_buf, strlen(cmd_buf), buf, &len, NULL) < 0) {
 		printf("wpa_command: wpa_ctrl_request failed\n");
 		wpa_ctrl_close(ctrl);
 		return -1;
@@ -64,12 +77,22 @@ int wpa_command_resp(const char *ifname, const char *cmd,
 	struct wpa_ctrl *ctrl;
 	size_t len;
 
-	printf("wpa_command(ifname='%s', cmd='%s')\n", ifname, cmd);
+	char cmd_buf[128];
+
+	os_memset(cmd_buf, 0, sizeof(cmd_buf));
+
+#ifdef ANDROID
+	os_snprintf(cmd_buf, sizeof(cmd_buf), "IFNAME=%s %s", ifname, cmd);
+#else
+	os_snprintf(cmd_buf, sizeof(cmd_buf), "%s", cmd);
+#endif
+
+	printf("wpa_command(ifname='%s', cmd='%s')\n", ifname, cmd_buf);
 	ctrl = wpa_open_ctrl(ifname);
 	if (ctrl == NULL)
 		return -1;
 	len = resp_size;
-	if (wpa_ctrl_request(ctrl, cmd, strlen(cmd), resp, &len, NULL) < 0) {
+	if (wpa_ctrl_request(ctrl, cmd_buf, strlen(cmd_buf), resp, &len, NULL) < 0) {
 		printf("wpa_command: wpa_ctrl_request failed\n");
 		wpa_ctrl_close(ctrl);
 		return -1;

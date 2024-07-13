@@ -998,6 +998,14 @@ struct wpa_config {
 	enum mfp_options pmf;
 
 	/**
+	 * rrm - Whether to enable radio resource management by default
+	 *
+	 * By default, RRM is disabled . rrm=1 can be used to change this
+	 * default behavior.
+	 */
+	int rrm;
+
+	/**
 	 * sae_groups - Preference list of enabled groups for SAE
 	 *
 	 * By default (if this parameter is not set), the mandatory group 19

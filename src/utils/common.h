@@ -354,6 +354,17 @@ static inline void WPA_PUT_LE64(u8 *a, u64 val)
 #ifndef ETH_P_RRB
 #define ETH_P_RRB 0x890D
 #endif /* ETH_P_RRB */
+#ifdef CONFIG_WAPI
+#ifndef ETH_HLEN
+#define ETH_HLEN 14
+#endif
+#ifndef ETH_P_WAI
+#define ETH_P_WAI 0x88B4
+#endif
+#ifndef ETH_P_WAI_PREAUTH
+#define ETH_P_WAI_PREAUTH 0x88B5
+#endif
+#endif
 
 
 #ifdef __GNUC__

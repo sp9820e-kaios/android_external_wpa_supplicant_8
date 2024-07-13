@@ -5,6 +5,9 @@
  * This software may be distributed under the terms of the BSD license.
  * See README for more details.
  */
+ #ifdef CONFIG_ATCI
+#include "sim_funcs.h"
+#endif
 
 #ifndef PCSC_FUNCS_H
 #define PCSC_FUNCS_H
@@ -27,6 +30,11 @@ int scard_supports_umts(struct scard_data *scard);
 
 #else /* PCSC_FUNCS */
 
+#ifdef CONFIG_ATCI
+#define scard_init(s, r) NULL
+#define scard_deinit(s) do { } while (0)
+#define scard_supports_umts(s) 0
+#else
 #define scard_init(r) NULL
 #define scard_deinit(s) do { } while (0)
 #define scard_set_pin(s, p) -1
@@ -36,6 +44,7 @@ int scard_supports_umts(struct scard_data *scard);
 #define scard_umts_auth(s, r, a, r2, rl, i, c, a2) -1
 #define scard_get_pin_retry_counter(s) -1
 #define scard_supports_umts(s) 0
+#endif
 
 #endif /* PCSC_FUNCS */
 

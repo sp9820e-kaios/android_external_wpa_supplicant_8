@@ -715,7 +715,7 @@ void p2p_buf_add_group_info(struct p2p_group *group, struct wpabuf *buf,
 			    int max_clients);
 void p2p_group_buf_add_id(struct p2p_group *group, struct wpabuf *buf);
 int p2p_group_get_freq(struct p2p_group *group);
-
+void p2p_group_add_common_ies(struct p2p_group *group, struct wpabuf *ie);
 
 void p2p_buf_add_action_hdr(struct wpabuf *buf, u8 subtype, u8 dialog_token);
 void p2p_buf_add_public_action_hdr(struct wpabuf *buf, u8 subtype,

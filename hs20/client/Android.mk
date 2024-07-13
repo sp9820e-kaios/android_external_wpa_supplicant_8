@@ -4,8 +4,10 @@ INCLUDES = $(LOCAL_PATH)
 INCLUDES += $(LOCAL_PATH)/../../src/utils
 INCLUDES += $(LOCAL_PATH)/../../src/common
 INCLUDES += $(LOCAL_PATH)/../../src
+INCLUDES += external/openssl/include
 INCLUDES += external/libxml2/include
 INCLUDES += external/curl/include
+#INCLUDES += vendor/sprd/proprietories-source/video/extern/curl/include
 INCLUDES += external/webkit/Source/WebKit/gtk
 
 # We try to keep this compiling against older platform versions.
@@ -37,8 +39,8 @@ OBJS += est.c
 OBJS += ../../src/common/wpa_ctrl.c
 OBJS += ../../src/common/wpa_helpers.c
 OBJS += ../../src/utils/xml-utils.c
-#OBJS += ../../src/utils/browser-android.c
-OBJS += ../../src/utils/browser-wpadebug.c
+OBJS += ../../src/utils/browser-android.c
+#OBJS += ../../src/utils/browser-wpadebug.c
 OBJS += ../../src/utils/wpabuf.c
 OBJS += ../../src/utils/eloop.c
 OBJS += ../../src/wps/httpread.c
@@ -54,11 +56,13 @@ OBJS += ../../src/crypto/crypto_internal.c
 OBJS += ../../src/crypto/md5-internal.c
 OBJS += ../../src/crypto/sha1-internal.c
 OBJS += ../../src/crypto/sha256-internal.c
+OBJS += ../../src/crypto/tls_openssl_ocsp.c
 
 L_CFLAGS += -DEAP_TLS_OPENSSL
 
 L_CFLAGS += -Wno-unused-parameter
 
+L_CFLAGS += -DCONFIG_ANDROID_LOG
 
 ########################
 include $(CLEAR_VARS)

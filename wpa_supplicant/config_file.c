@@ -812,6 +812,11 @@ static void wpa_config_write_network(FILE *f, struct wpa_ssid *ssid)
 	INT_DEF(vht_tx_mcs_nss_7, -1);
 	INT_DEF(vht_tx_mcs_nss_8, -1);
 #endif /* CONFIG_VHT_OVERRIDES */
+#ifdef CONFIG_WAPI
+	INT(psk_key_type);
+	STR(wapi_as_cert);
+	STR(wapi_user_cert);
+#endif
 
 #undef STR
 #undef INT
@@ -1192,6 +1197,8 @@ static void wpa_config_write_global(FILE *f, struct wpa_config *config)
 		fprintf(f, "okc=%d\n", config->okc);
 	if (config->pmf)
 		fprintf(f, "pmf=%d\n", config->pmf);
+	if (config->rrm)
+		fprintf(f, "rrm=%d\n", config->rrm);
 	if (config->dtim_period)
 		fprintf(f, "dtim_period=%d\n", config->dtim_period);
 	if (config->beacon_int)

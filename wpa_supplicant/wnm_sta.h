@@ -59,6 +59,9 @@ int wnm_send_bss_transition_mgmt_query(struct wpa_supplicant *wpa_s,
 				       u8 query_reason);
 void wnm_deallocate_memory(struct wpa_supplicant *wpa_s);
 
+int ieee802_11_send_wnmtfs_req(struct wpa_supplicant *wpa_s, struct wpabuf *tfs_req);
+
+int ieee802_11_send_wnmdms_req(struct wpa_supplicant *wpa_s, struct wpabuf *dms_req);
 
 #ifdef CONFIG_WNM
 

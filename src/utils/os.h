@@ -512,6 +512,10 @@ char * os_strdup(const char *s);
 #define os_memcmp(s1, s2, n) memcmp((s1), (s2), (n))
 #endif
 
+#ifndef os_strncpy
+#define os_strncpy(s1, s2, n) strncpy((s1), (s2), (n))
+#endif
+
 #ifndef os_strlen
 #define os_strlen(s) strlen(s)
 #endif
